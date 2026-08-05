@@ -35,7 +35,7 @@
 | `docs/decisions/ADR-0001-backend-language-and-runtime.md` | ADR-0001 — Backend Language and Runtime | decisions | Утверждён | Product Owner | Выбрать язык и runtime backend платформы. | 2026-08-05 | — | Утверждённое архитектурное решение: CPython 3.14 как backend language/runtime для MVP. |
 | `docs/decisions/ADR-0002-backend-api-adapter.md` | ADR-0002 — Backend API Adapter | decisions | Утверждён | Product Owner | Выбрать HTTP/ASGI API adapter backend платформы. | 2026-08-05 | — | Утверждённое архитектурное решение: FastAPI как внешний HTTP/ASGI API adapter backend платформы. |
 | `docs/decisions/ADR-0003-frontend-stack.md` | ADR-0003 — Frontend Stack | decisions | Утверждён | Product Owner | Выбрать язык, UI-библиотеку и framework первого веб-клиента. | 2026-08-05 | — | Утверждённое архитектурное решение: TypeScript, React и Next.js App Router как frontend stack первого веб-клиента. |
-| `docs/decisions/ADR-0004-primary-data-store.md` | ADR-0004 — Primary Data Store | decisions | На ревью | Product Owner | Выбрать основное транзакционное хранилище данных платформы. | 2026-08-05 | — | Ожидает архитектурного ревью и принятия Product Owner. |
+| `docs/decisions/ADR-0004-primary-data-store.md` | ADR-0004 — Primary Data Store | decisions | Утверждён | Product Owner | Выбрать основное транзакционное хранилище данных платформы. | 2026-08-05 | — | Утверждённое архитектурное решение: PostgreSQL как основное транзакционное хранилище и transactional system of record платформы. |
 
 ---
 

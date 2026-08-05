@@ -1,6 +1,6 @@
 # ADR-0004 — Primary Data Store
 
-**Статус:** На ревью
+**Статус:** Утверждён
 **Владелец решения:** Product Owner
 **Автор предложения:** Solution Architect
 **Дата:** 2026-08-05
@@ -18,7 +18,7 @@ Primary Data Store
 
 ## 3. Статус
 
-На ревью
+Утверждён
 
 ## 4. Дата
 
@@ -595,13 +595,18 @@ ADR-0004 пересматривается, если:
 
 ## 41. Решение Product Owner
 
-На ревью.
+Product Owner утверждает PostgreSQL как основное транзакционное хранилище и transactional system of record AI Trading Assistant Platform.
+
+Утверждение относится к выбору PostgreSQL как основной СУБД. Точная major- и patch-версия PostgreSQL, Python driver, ORM или data-access подход, migration tool, connection pool, deployment-модель, managed provider и backup-инструменты выбираются отдельными решениями или задачами.
+
+PostgreSQL не утверждается как message broker, cache, object storage, отдельная vector database или обязательное хранилище всех raw tick, Order Book и Time & Sales данных. TimescaleDB, pgvector и другие расширения настоящим ADR не выбираются.
 
 ## 42. История изменений статуса
 
 | Дата | Статус | Кем изменён | Примечание |
 |---|---|---|---|
 | 2026-08-05 | На ревью | Claude (оформление по предложению Solution Architect) | создано предложение выбрать PostgreSQL как основное транзакционное хранилище платформы |
+| 2026-08-05 | Утверждён | Product Owner | принято решение использовать PostgreSQL как основное транзакционное хранилище платформы |
 
 ## 43. Источники исследования
 
