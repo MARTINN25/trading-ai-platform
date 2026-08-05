@@ -20,6 +20,9 @@
 | `docs/DOCUMENT_REGISTER.md` | Document Register | processes | Утверждён | Product Owner | Хранить единый перечень управляемых документов и их актуальный статус. | 2026-08-05 | — | Настоящий документ. |
 | `.ai-context/CURRENT_STATE.md` | Current Project State | AI context | Утверждён | Product Owner | Предоставить AI-агентам краткий актуальный контекст перед началом задачи. | 2026-08-05 | — | Оперативный, не архитектурный источник состояния. |
 | `templates/CLAUDE_TASK_TEMPLATE.md` | Claude Task Template | templates | Утверждён | Product Owner | Обеспечить единый безопасный формат постановки задач Claude. | 2026-08-05 | — | Не содержит реальных значений задачи. |
+| `docs/processes/ADR_PROCESS.md` | ADR Process | processes | Утверждён | Product Owner | Определить порядок работы с архитектурными решениями. | 2026-08-05 | — | Определяет процесс архитектурных решений. |
+| `templates/ADR_TEMPLATE.md` | ADR Template | templates | Утверждён | Product Owner | Обеспечить единый формат ADR. | 2026-08-05 | — | Утверждённый шаблон ADR. |
+| `docs/architecture/ENGINEERING_PRINCIPLES.md` | Engineering Principles | architecture | Утверждён | Product Owner | Определить общие инженерные принципы платформы. | 2026-08-05 | — | Общие инженерные принципы без выбора стека. |
 
 ---
 
