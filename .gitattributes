@@ -1,0 +1,49 @@
+# Нормализация: LF — канонический формат хранения в репозитории.
+# text=auto позволяет Git корректно работать с рабочими копиями на Windows
+# без постоянных ложных изменений (LF/CRLF diff-шума).
+* text=auto
+
+# Текстовые форматы — принудительно LF при хранении в репозитории
+*.md            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.json          text eol=lf
+*.toml          text eol=lf
+*.ini           text eol=lf
+*.env.example   text eol=lf
+*.sh            text eol=lf
+*.py            text eol=lf
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.js            text eol=lf
+*.jsx           text eol=lf
+*.css           text eol=lf
+*.scss          text eol=lf
+*.html          text eol=lf
+Dockerfile      text eol=lf
+*.dockerfile    text eol=lf
+
+# Служебные Git-файлы — LF
+.gitattributes  text eol=lf
+.gitignore      text eol=lf
+
+# Windows-специфичные скрипты
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=lf
+
+# Бинарные форматы — без текстовой обработки и без diff по строкам
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+*.pdf    binary
+*.zip    binary
+*.gz     binary
+*.7z     binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.otf    binary
