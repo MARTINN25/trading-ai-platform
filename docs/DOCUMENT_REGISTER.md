@@ -38,6 +38,7 @@
 | `docs/decisions/ADR-0004-primary-data-store.md` | ADR-0004 — Primary Data Store | decisions | Утверждён | Product Owner | Выбрать основное транзакционное хранилище данных платформы. | 2026-08-05 | — | Утверждённое архитектурное решение: PostgreSQL как основное транзакционное хранилище и transactional system of record платформы. |
 | `docs/decisions/ADR-0005-vector-search-strategy.md` | ADR-0005 — Vector Search Strategy | decisions | Утверждён | Product Owner | Определить необходимость, границы и поэтапную стратегию векторного поиска. | 2026-08-05 | — | Утверждённое архитектурное решение: трёхфазная стратегия развития поиска — PostgreSQL Full-Text Search в MVP, pgvector как первый кандидат после подтверждения необходимости, отдельная vector database только при доказанной недостаточности pgvector. |
 | `docs/decisions/ADR-0006-background-jobs-and-queue.md` | ADR-0006 — Background Jobs and Queue | decisions | Утверждён | Product Owner | определить стратегию фоновых задач, очереди, worker-процессов и планирования | 2026-08-05 | — | Утверждённое архитектурное решение: PostgreSQL-backed durable queue и отдельный worker-процесс для критичных и долговечных задач MVP без отдельного message broker. |
+| `docs/decisions/ADR-0007-llm-provider-integration.md` | ADR-0007 — LLM Provider Integration Strategy | decisions | На ревью | Product Owner | определить выбор начального LLM-провайдера и provider-neutral стратегию интеграции через llm_gateway | 2026-08-05 | — | ожидает архитектурного ревью и принятия Product Owner |
 
 ---
 
