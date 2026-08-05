@@ -33,6 +33,7 @@
 | `docs/architecture/FAILURE_MODEL.md` | Failure Model | architecture | Утверждён | Product Owner | Определить классы отказов, ожидаемое поведение и границы деградации платформы. | 2026-08-05 | — | Утверждённая модель отказов и деградации. |
 | `docs/architecture/TECHNOLOGY_EVALUATION.md` | Technology Evaluation | architecture | Утверждён | Product Owner | Сравнить технологические варианты для MVP и подготовить основания для отдельных ADR выбора стека. | 2026-08-05 | — | Утверждённое сравнительное основание для отдельных ADR; не является действующим решением о технологическом стеке. |
 | `docs/decisions/ADR-0001-backend-language-and-runtime.md` | ADR-0001 — Backend Language and Runtime | decisions | Утверждён | Product Owner | Выбрать язык и runtime backend платформы. | 2026-08-05 | — | Утверждённое архитектурное решение: CPython 3.14 как backend language/runtime для MVP. |
+| `docs/decisions/ADR-0002-backend-api-adapter.md` | ADR-0002 — Backend API Adapter | decisions | На ревью | Product Owner | Выбрать HTTP/ASGI API adapter backend платформы. | 2026-08-05 | — | Ожидает архитектурного ревью и принятия Product Owner. |
 
 ---
 
