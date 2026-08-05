@@ -1,6 +1,6 @@
 # ADR-0003 — Frontend Stack
 
-**Статус:** На ревью
+**Статус:** Утверждён
 **Владелец решения:** Product Owner
 **Автор предложения:** Solution Architect
 **Дата:** 2026-08-05
@@ -18,7 +18,7 @@ Frontend Stack
 
 ## 3. Статус
 
-На ревью
+Утверждён
 
 ## 4. Дата
 
@@ -593,13 +593,18 @@ ADR-0003 пересматривается, если:
 
 ## 38. Решение Product Owner
 
-На ревью.
+Product Owner утверждает TypeScript, React и Next.js App Router как frontend stack первого веб-клиента платформы.
+
+Frontend остаётся отдельным клиентом FastAPI Application API. Next.js не является владельцем бизнес-логики и не должен превращаться во второй backend.
+
+Утверждение не включает конкретную версию Node.js, package manager, UI-библиотеку, styling framework, state-management, data-fetching, charting, WebSocket и testing-библиотеки — они выбираются отдельными решениями.
 
 ## 39. История изменений статуса
 
 | Дата | Статус | Кем изменён | Примечание |
 |---|---|---|---|
 | 2026-08-05 | На ревью | Claude (оформление по предложению Solution Architect) | создано предложение выбрать TypeScript, React и Next.js App Router как frontend stack |
+| 2026-08-05 | Утверждён | Product Owner | принято решение использовать TypeScript, React и Next.js App Router как frontend stack первого веб-клиента |
 
 ## 40. Источники исследования
 
