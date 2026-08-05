@@ -31,6 +31,7 @@
 | `docs/architecture/MODULE_BOUNDARIES.md` | Module Boundaries | architecture | Утверждён | Product Owner | Определить логические границы модулей и разрешённые зависимости между ними. | 2026-08-05 | — | Утверждённые границы модулей и зависимостей. |
 | `docs/architecture/DATA_FLOWS.md` | Data Flows | architecture | Утверждён | Product Owner | Определить основные логические потоки данных платформы. | 2026-08-05 | — | Утверждённые логические потоки данных. |
 | `docs/architecture/FAILURE_MODEL.md` | Failure Model | architecture | Утверждён | Product Owner | Определить классы отказов, ожидаемое поведение и границы деградации платформы. | 2026-08-05 | — | Утверждённая модель отказов и деградации. |
+| `docs/architecture/TECHNOLOGY_EVALUATION.md` | Technology Evaluation | architecture | На ревью | Product Owner | Сравнить технологические варианты для MVP и подготовить основания для отдельных ADR выбора стека. | 2026-08-05 | — | Аналитическое сравнение, не является действующим решением о стеке; действующие решения — предмет отдельных будущих ADR. |
 
 ---
 
