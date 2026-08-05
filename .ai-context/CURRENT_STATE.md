@@ -50,7 +50,7 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
-Нет документов на ревью.
+- `docs/decisions/ADR-0007-llm-provider-integration.md`
 
 ## 5. Что ещё не утверждено
 
@@ -73,7 +73,13 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 - retry library не утверждена;
 - схема job storage не утверждена;
 - отдельный message broker не утверждён;
-- LLM provider integration strategy;
+- LLM provider integration strategy остаётся неутверждённой;
+- конкретный provider остаётся неутверждённым до принятия ADR;
+- конкретная model/model ID не утверждены;
+- provider SDK/version не утверждены;
+- prompt registry/storage не утверждён;
+- tool implementation не утверждена;
+- fallback policy не утверждена до принятия ADR;
 - ASGI server;
 - authentication provider;
 - контейнеризация и deployment;
@@ -102,11 +108,11 @@ ADR-0006-FINAL.
 
 ## 8. Текущая задача
 
-Отсутствует.
+ADR-0007 — LLM provider integration strategy, на ревью.
 
 ## 9. Следующий планируемый блок
 
-ADR-0007 — LLM provider integration strategy.
+финализация ADR-0007, затем ADR-0008 — контейнеризация и single-server deployment.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 
