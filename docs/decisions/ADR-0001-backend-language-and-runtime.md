@@ -1,6 +1,6 @@
 # ADR-0001 — Backend Language and Runtime
 
-**Статус:** На ревью
+**Статус:** Утверждён
 **Владелец решения:** Product Owner
 **Автор предложения:** Solution Architect
 **Дата:** 2026-08-05
@@ -18,7 +18,7 @@ Backend Language and Runtime
 
 ## 3. Статус
 
-На ревью
+Утверждён
 
 ## 4. Дата
 
@@ -298,13 +298,16 @@ ADR-0001 пересматривается, если:
 
 ## 28. Решение Product Owner
 
-На ревью.
+Product Owner утверждает выбор CPython 3.14 как backend language/runtime для MVP со стандартной GIL-enabled сборкой и версионной политикой, определённой настоящим ADR.
+
+Утверждение распространяется только на язык и runtime backend. API adapter, frontend, хранилище, очередь, LLM integration и deployment остаются предметом отдельных ADR.
 
 ## 29. История изменений статуса
 
 | Дата | Статус | Кем изменён | Примечание |
 |---|---|---|---|
 | 2026-08-05 | На ревью | Claude (оформление по предложению Solution Architect) | создано предложение выбрать Python 3.14 как backend runtime |
+| 2026-08-05 | Утверждён | Product Owner | принято решение использовать CPython 3.14 как backend language/runtime для MVP |
 
 ## 30. Источники исследования
 
