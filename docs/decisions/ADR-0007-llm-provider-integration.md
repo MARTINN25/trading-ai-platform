@@ -1,6 +1,6 @@
 # ADR-0007 — LLM Provider Integration Strategy
 
-**Статус:** На ревью
+**Статус:** Утверждён
 **Владелец решения:** Product Owner
 **Автор предложения:** Solution Architect
 **Дата:** 2026-08-05
@@ -18,7 +18,7 @@ LLM Provider Integration Strategy
 
 ## 3. Статус
 
-На ревью
+Утверждён
 
 ## 4. Дата
 
@@ -835,13 +835,28 @@ ADR-0007 пересматривается, если:
 
 ## 64. Решение Product Owner
 
-На ревью.
+Утверждено. Product Owner фиксирует следующую стратегию интеграции LLM-провайдера для MVP:
+
+- xAI утверждается как начальный LLM-провайдер MVP;
+- все вызовы LLM проходят только через provider-neutral `llm_gateway`;
+- SDK конкретного provider не должен проникать в `application`, `domain`, `analysis`, `insights`, frontend и transport;
+- конкретный model ID не фиксируется навсегда;
+- production model выбирается из allowlist и проходит evaluation;
+- preview/beta model не используется без отдельного решения;
+- automatic cross-provider fallback запрещён;
+- LLM не является источником фактов;
+- LLM не определяет authorization;
+- LLM не исполняет сделки;
+- structured output проходит локальную validation;
+- provider/model/prompt version/usage/provenance сохраняются;
+- конкретная model, SDK version, prompt registry implementation, tool implementation и fallback implementation остаются отдельными implementation-решениями.
 
 ## 65. История изменений статуса
 
 | Дата | Статус | Кем изменён | Примечание |
 |---|---|---|---|
 | 2026-08-05 | На ревью | Claude (оформление по предложению Solution Architect) | создано предложение использовать xAI как начального LLM-провайдера MVP через provider-neutral llm_gateway без автоматического cross-provider fallback |
+| 2026-08-05 | Утверждён | Product Owner | принято решение использовать xAI как начального LLM-провайдера MVP через provider-neutral llm_gateway без автоматического cross-provider fallback. |
 
 ## 66. Источники исследования
 
