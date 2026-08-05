@@ -49,7 +49,7 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
-Нет документов на ревью.
+- `docs/decisions/ADR-0006-background-jobs-and-queue.md`
 
 ## 5. Что ещё не утверждено
 
@@ -67,7 +67,10 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 - pgvector или отдельная vector database;
 - embedding provider/model;
 - TimescaleDB или отдельное time-series хранилище;
-- фоновые задачи и очередь;
+- стратегия фоновых задач и очереди остаётся неутверждённой;
+- конкретная worker/queue library не утверждена;
+- отдельный message broker не утверждён;
+- scheduler не утверждён;
 - LLM provider integration strategy;
 - ASGI server;
 - authentication provider;
@@ -97,11 +100,11 @@ ADR-0005-FINAL.
 
 ## 8. Текущая задача
 
-Отсутствует.
+ADR-0006 — фоновые задачи и очередь, на ревью.
 
 ## 9. Следующий планируемый блок
 
-`ADR-0006` — фоновые задачи и очередь.
+финализация ADR-0006, затем ADR-0007 — LLM provider integration strategy.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 
