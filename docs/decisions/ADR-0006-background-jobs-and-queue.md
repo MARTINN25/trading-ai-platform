@@ -1,6 +1,6 @@
 # ADR-0006 — Background Jobs and Queue
 
-**Статус:** На ревью
+**Статус:** Утверждён
 **Владелец решения:** Product Owner
 **Автор предложения:** Solution Architect
 **Дата:** 2026-08-05
@@ -18,7 +18,7 @@ Background Jobs and Queue
 
 ## 3. Статус
 
-На ревью
+Утверждён
 
 ## 4. Дата
 
@@ -715,13 +715,21 @@ ADR-0006 пересматривается, если:
 
 ## 58. Решение Product Owner
 
-На ревью.
+Утверждено. Product Owner фиксирует следующую архитектурную стратегию фоновых задач и очереди для MVP:
+
+- критичные, долгие, плановые и требующие гарантированного выполнения задачи выполняются отдельным worker-процессом;
+- PostgreSQL job record является source of truth состояния задач;
+- отдельный Redis, RabbitMQ или Kafka broker в MVP не вводится;
+- FastAPI `BackgroundTasks` не используются для критичных и долговечных задач;
+- exactly-once не обещается;
+- конкретная Python worker/queue library, scheduler, схема таблиц, retry library и отдельный broker остаются предметом отдельных implementation-решений.
 
 ## 59. История изменений статуса
 
 | Дата | Статус | Кем изменён | Примечание |
 |---|---|---|---|
 | 2026-08-05 | На ревью | Claude (оформление по предложению Solution Architect) | создано предложение использовать PostgreSQL-backed durable queue и отдельный worker в MVP без отдельного message broker |
+| 2026-08-05 | Утверждён | Product Owner | принято решение использовать PostgreSQL-backed durable queue и отдельный worker-процесс для критичных и долговечных задач MVP без отдельного message broker. |
 
 ## 60. Источники исследования
 
