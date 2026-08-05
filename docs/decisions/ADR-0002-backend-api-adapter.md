@@ -1,6 +1,6 @@
 # ADR-0002 — Backend API Adapter
 
-**Статус:** На ревью
+**Статус:** Утверждён
 **Владелец решения:** Product Owner
 **Автор предложения:** Solution Architect
 **Дата:** 2026-08-05
@@ -18,7 +18,7 @@ Backend API Adapter
 
 ## 3. Статус
 
-На ревью
+Утверждён
 
 ## 4. Дата
 
@@ -414,13 +414,18 @@ ADR-0002 пересматривается, если:
 
 ## 30. Решение Product Owner
 
-На ревью.
+Product Owner утверждает FastAPI как внешний HTTP/ASGI API adapter backend платформы.
+
+Утверждение распространяется только на adapter-слой. Application Layer, domain-модули, persistence, очередь фоновых задач, ASGI server, authentication provider, frontend и deployment остаются независимыми решениями и предметом отдельных ADR или задач.
+
+FastAPI не допускается импортировать в application/domain, а критичные фоновые задачи не допускается выполнять через BackgroundTasks.
 
 ## 31. История изменений статуса
 
 | Дата | Статус | Кем изменён | Примечание |
 |---|---|---|---|
 | 2026-08-05 | На ревью | Claude (оформление по предложению Solution Architect) | создано предложение выбрать FastAPI как backend API adapter |
+| 2026-08-05 | Утверждён | Product Owner | принято решение использовать FastAPI как внешний HTTP/ASGI API adapter backend платформы |
 
 ## 32. Источники исследования
 
