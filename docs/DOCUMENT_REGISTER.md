@@ -27,6 +27,10 @@
 | `docs/product/FUNCTIONAL_REQUIREMENTS.md` | Functional Requirements | product | Утверждён | Product Owner | Определить функциональные требования AI Trading Assistant Platform. | 2026-08-05 | — | Утверждённые функциональные требования. |
 | `docs/product/NON_FUNCTIONAL_REQUIREMENTS.md` | Non-Functional Requirements | product | Утверждён | Product Owner | Определить измеримые нефункциональные требования платформы и открытые целевые показатели. | 2026-08-05 | — | Утверждённые нефункциональные требования и открытые измеримые показатели. |
 | `docs/product/USER_JOURNEYS.md` | User Journeys | product | Утверждён | Product Owner | Определить ключевые пользовательские сценарии платформы. | 2026-08-05 | — | Утверждённые пользовательские сценарии. |
+| `docs/architecture/LOGICAL_ARCHITECTURE.md` | Logical Architecture | architecture | Утверждён | Product Owner | Определить логическую архитектуру AI Trading Assistant Platform без привязки к конкретному стеку. | 2026-08-05 | — | Утверждённая логическая архитектура без выбора стека. |
+| `docs/architecture/MODULE_BOUNDARIES.md` | Module Boundaries | architecture | Утверждён | Product Owner | Определить логические границы модулей и разрешённые зависимости между ними. | 2026-08-05 | — | Утверждённые границы модулей и зависимостей. |
+| `docs/architecture/DATA_FLOWS.md` | Data Flows | architecture | Утверждён | Product Owner | Определить основные логические потоки данных платформы. | 2026-08-05 | — | Утверждённые логические потоки данных. |
+| `docs/architecture/FAILURE_MODEL.md` | Failure Model | architecture | Утверждён | Product Owner | Определить классы отказов, ожидаемое поведение и границы деградации платформы. | 2026-08-05 | — | Утверждённая модель отказов и деградации. |
 
 ---
 
