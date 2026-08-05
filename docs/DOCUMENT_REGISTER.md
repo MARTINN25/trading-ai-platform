@@ -23,6 +23,10 @@
 | `docs/processes/ADR_PROCESS.md` | ADR Process | processes | Утверждён | Product Owner | Определить порядок работы с архитектурными решениями. | 2026-08-05 | — | Определяет процесс архитектурных решений. |
 | `templates/ADR_TEMPLATE.md` | ADR Template | templates | Утверждён | Product Owner | Обеспечить единый формат ADR. | 2026-08-05 | — | Утверждённый шаблон ADR. |
 | `docs/architecture/ENGINEERING_PRINCIPLES.md` | Engineering Principles | architecture | Утверждён | Product Owner | Определить общие инженерные принципы платформы. | 2026-08-05 | — | Общие инженерные принципы без выбора стека. |
+| `docs/product/PRODUCT_SCOPE.md` | Product Scope | product | На ревью | Product Owner | Определить назначение, границы, пользователей и этапы развития продукта. | 2026-08-05 | — | Создан впервые в PROD-0001. |
+| `docs/product/FUNCTIONAL_REQUIREMENTS.md` | Functional Requirements | product | На ревью | Product Owner | Определить функциональные требования AI Trading Assistant Platform. | 2026-08-05 | — | Создан впервые в PROD-0001. |
+| `docs/product/NON_FUNCTIONAL_REQUIREMENTS.md` | Non-Functional Requirements | product | На ревью | Product Owner | Определить измеримые нефункциональные требования платформы и открытые целевые показатели. | 2026-08-05 | — | Создан впервые в PROD-0001. |
+| `docs/product/USER_JOURNEYS.md` | User Journeys | product | На ревью | Product Owner | Определить ключевые пользовательские сценарии платформы. | 2026-08-05 | — | Создан впервые в PROD-0001. |
 
 ---
 
