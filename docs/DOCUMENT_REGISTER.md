@@ -37,6 +37,7 @@
 | `docs/decisions/ADR-0003-frontend-stack.md` | ADR-0003 — Frontend Stack | decisions | Утверждён | Product Owner | Выбрать язык, UI-библиотеку и framework первого веб-клиента. | 2026-08-05 | — | Утверждённое архитектурное решение: TypeScript, React и Next.js App Router как frontend stack первого веб-клиента. |
 | `docs/decisions/ADR-0004-primary-data-store.md` | ADR-0004 — Primary Data Store | decisions | Утверждён | Product Owner | Выбрать основное транзакционное хранилище данных платформы. | 2026-08-05 | — | Утверждённое архитектурное решение: PostgreSQL как основное транзакционное хранилище и transactional system of record платформы. |
 | `docs/decisions/ADR-0005-vector-search-strategy.md` | ADR-0005 — Vector Search Strategy | decisions | Утверждён | Product Owner | Определить необходимость, границы и поэтапную стратегию векторного поиска. | 2026-08-05 | — | Утверждённое архитектурное решение: трёхфазная стратегия развития поиска — PostgreSQL Full-Text Search в MVP, pgvector как первый кандидат после подтверждения необходимости, отдельная vector database только при доказанной недостаточности pgvector. |
+| `docs/decisions/ADR-0006-background-jobs-and-queue.md` | ADR-0006 — Background Jobs and Queue | decisions | На ревью | Product Owner | определить стратегию фоновых задач, очереди, worker-процессов и планирования | 2026-08-05 | — | ожидает архитектурного ревью и принятия Product Owner |
 
 ---
 
