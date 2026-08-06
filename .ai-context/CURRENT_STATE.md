@@ -53,17 +53,17 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
-Local PostgreSQL Runtime, ревизия R1 (ветка `feat/local-postgresql-runtime`):
+Watchlist Vertical Slice (ветка `feat/watchlist-vertical-slice`) — первый маленький сквозной backend use case поверх реального PostgreSQL:
 
-- `compose.yaml` — только сервис PostgreSQL для локальной разработки (именованный volume, `pg_isready`-healthcheck, без Dockerfile);
-- публикация порта исправлена на loopback-only: `127.0.0.1:${POSTGRES_HOST_PORT:-55432}:5432` (R1: изначальная версия ошибочно публиковала `0.0.0.0:5432`, что конфликтовало с уже установленным на машине нативным PostgreSQL на `5432` — это наиболее вероятно объясняет наблюдавшиеся ранее сбои Windows-native `asyncpg` (строго не подтверждено воспроизведением на прежней конфигурации), а не «баг Docker Desktop», как было сформулировано в исходном отчёте);
-- выбор конкретного образа `postgres:18-alpine` для этого runtime (точная версия была открытым вопросом по `ADR-0004`, раздел 36);
-- `.env.compose.example` (переменная `POSTGRES_HOST_PORT`, без реальных credentials);
-- обновления `.gitignore`, `README.md`.
+- domain: immutable `WatchlistItem` (`trading_ai/watchlist/domain.py`), нормализация тикера (trim/uppercase/непустой/≤15 символов/безопасный набор символов), не связана с SQLAlchemy;
+- persistence: `WatchlistItemModel` → таблица `watchlist_items` (id identity PK, `ticker` с unique constraint, `created_at timestamptz` с server-side `now()`, без JSONB, без soft delete, без `updated_at`);
+- migration `0002_watchlist_items` (после `0001_initial_baseline`, с корректным `downgrade`), не затрагивает бизнес-схему сверх этой таблицы;
+- repository: конкретный `WatchlistRepository` (не generic), не коммитит — транзакционная граница у `session_scope`; duplicate обнаруживается через flush и UNIQUE constraint, не через предварительный `SELECT`;
+- application: `AddWatchlistItem`, `ListWatchlistItems`;
+- API: `POST /watchlist` (`201`/`409`/`422`), `GET /watchlist` (`200`) — route handler не содержит SQL и не создаёт engine напрямую (ADR-0002, раздел 17);
+- не добавлены: сделки, позиции, портфели, market data, LLM, auth, frontend-интеграция, background jobs, WebSocket, Redis, generic repository/service locator/CQRS/event bus.
 
-Не является production Compose-моделью из `ADR-0008` (backend/frontend/worker/PostgreSQL/reverse proxy) — это отдельная последующая задача. Бизнес-схема не создавалась.
-
-Подтверждено на этой ревизии: нативный Windows-Python (`backend/.venv`) через `127.0.0.1:55432` — Alembic (`upgrade head`, `current`), запущенный `fastapi dev`-сервер (`/health`, `/ready` реальным HTTP-запросом), опциональный integration-тест (`pytest -m integration`) — без временного контейнера как основного пути проверки.
+Не является полной бизнес-моделью платформы — только первый вертикальный срез. Реально проверено: миграция и downgrade/upgrade-цикл, `pytest -v`, `mypy --strict`, integration-тесты и ручные HTTP-запросы против нативного Windows-backend и Compose PostgreSQL (`127.0.0.1:55432`); тестовые данные удалены после проверки.
 
 ## 5. Что ещё не утверждено
 
@@ -131,15 +131,15 @@ Local PostgreSQL Runtime, ревизия R1 (ветка `feat/local-postgresql-r
 
 ## 7. Последняя завершённая задача
 
-PostgreSQL Persistence Bootstrap.
+Local PostgreSQL Runtime.
 
 ## 8. Текущая задача
 
-Local PostgreSQL Runtime — на ревью.
+Watchlist Vertical Slice — на ревью.
 
 ## 9. Следующий планируемый блок
 
-первая бизнес-схема (после утверждения Local PostgreSQL Runtime).
+frontend-интеграция с watchlist либо следующая доменная сущность — после ревью Watchlist Vertical Slice.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 

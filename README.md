@@ -134,7 +134,7 @@ python -m alembic downgrade -1
 python -m alembic current
 ```
 
-Baseline-миграция (`0001_initial_baseline`) не создаёт ни одной бизнес-таблицы — она только устанавливает рабочую цепочку миграций для будущих задач.
+Baseline-миграция (`0001_initial_baseline`) не создаёт ни одной бизнес-таблицы — она только устанавливает рабочую цепочку миграций для будущих задач. `0002_watchlist_items` — первая бизнес-таблица (`watchlist_items`, см. ниже).
 
 #### Интеграционный тест против реального PostgreSQL
 
@@ -146,6 +146,28 @@ python -m pytest -v -m integration tests/integration
 ```
 
 Тест выполняет только `GET /ready`, то есть один безопасный `SELECT 1` — миграции не запускает и схему не создаёт.
+
+#### Watchlist — первый вертикальный slice
+
+`POST /watchlist` и `GET /watchlist` — первый маленький сквозной business use case поверх реального PostgreSQL (миграция `0002_watchlist_items`, таблица `watchlist_items`): domain-модель → application use case → repository → PostgreSQL, полностью за FastAPI-адаптером (`ADR-0002`, раздел 17). Это **не** полная бизнес-модель платформы — только минимальный вертикальный срез (добавить тикер, получить список, запретить дубликаты), демонстрирующий рабочий путь от HTTP до БД и обратно для будущих доменных областей.
+
+```powershell
+# добавить тикер (нормализуется: trim + uppercase)
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/watchlist" -Method Post -ContentType "application/json" -Body '{"ticker":"aapl"}'
+# -> { id, ticker: "AAPL", created_at }
+
+# получить список
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/watchlist" -Method Get
+
+# повторное добавление того же тикера -> HTTP 409 (Invoke-RestMethod бросает исключение на 409)
+try {
+    Invoke-RestMethod -Uri "http://127.0.0.1:8000/watchlist" -Method Post -ContentType "application/json" -Body '{"ticker":"AAPL"}'
+} catch {
+    Write-Host "status=$([int]$_.Exception.Response.StatusCode) body=$($_.ErrorDetails.Message)"
+}
+```
+
+Пустой/некорректный `ticker` (не только буквы/цифры/`.`/`-`, длиннее 15 символов) → `422`. Ответ никогда не содержит SQL-текста ошибки или stack trace — только `{"detail": "..."}`.
 
 ### Frontend (TypeScript strict, React, Next.js App Router)
 
