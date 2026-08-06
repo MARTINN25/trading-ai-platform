@@ -1,0 +1,56 @@
+
+# Local PostgreSQL runtime only (see .ai-context/CURRENT_STATE.md,
+# "локальный PostgreSQL runtime/Compose"). Not the production
+# multi-service Compose model from ADR-0008 (backend/frontend/worker/
+# PostgreSQL/reverse proxy) — that remains a separate, later task.
+# No Dockerfile and no business schema are introduced here.
+#
+# Image tag: the exact supported PostgreSQL version was left open by
+# ADR-0004 (§36, "версия выбирается на шаге плана внедрения") and is
+# fixed here at PostgreSQL 18 (latest stable major line per
+# postgresql.org at the time ADR-0004 was researched, supported until
+# 2030-11-14) — not PostgreSQL 19, which was in beta and is explicitly
+# not recommended for use by the official documentation.
+#
+# Credentials are supplied only via `--env-file .env.compose` (see
+# .env.compose.example); none are hardcoded here, and the `:?` guard
+# fails fast instead of silently starting an unauthenticated/empty
+# instance if a variable is missing.
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required (see .env.compose.example)}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.compose.example)}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required (see .env.compose.example)}
+      # Subdirectory, not the mount point itself: avoids the documented
+      # official-image failure mode where a pre-existing entry at the
+      # mount point (e.g. a volume driver's lost+found) makes initdb
+      # refuse to run (ADR-0008 §23).
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      # Bound to loopback only (127.0.0.1), never 0.0.0.0/[::] — this
+      # is a local development runtime, not something reachable from
+      # the network. Host-side port defaults to 55432 (not 5432) so it
+      # never collides with a PostgreSQL instance already installed
+      # natively on the developer's machine. Container-side port stays
+      # the PostgreSQL default (5432) regardless of the host port.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-55432}:5432"
+    volumes:
+      - trading_ai_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready's return codes are documented as script-friendly by
+      # the official utility docs (ADR-0008 §23) even though the
+      # postgres image page itself does not prescribe a healthcheck.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  # Named volume (not a bind mount) per ADR-0008 §23 — persists across
+  # container recreation independently of any host directory.
+  trading_ai_postgres_data:
+    name: trading_ai_postgres_data

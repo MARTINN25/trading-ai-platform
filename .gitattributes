@@ -11,6 +11,7 @@
 *.toml          text eol=lf
 *.ini           text eol=lf
 *.env.example   text eol=lf
+.env.compose.example text eol=lf
 *.sh            text eol=lf
 *.py            text eol=lf
 *.mako          text eol=lf

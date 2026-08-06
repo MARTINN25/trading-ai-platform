@@ -53,7 +53,17 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
-Нет документов на ревью.
+Local PostgreSQL Runtime, ревизия R1 (ветка `feat/local-postgresql-runtime`):
+
+- `compose.yaml` — только сервис PostgreSQL для локальной разработки (именованный volume, `pg_isready`-healthcheck, без Dockerfile);
+- публикация порта исправлена на loopback-only: `127.0.0.1:${POSTGRES_HOST_PORT:-55432}:5432` (R1: изначальная версия ошибочно публиковала `0.0.0.0:5432`, что конфликтовало с уже установленным на машине нативным PostgreSQL на `5432` — это наиболее вероятно объясняет наблюдавшиеся ранее сбои Windows-native `asyncpg` (строго не подтверждено воспроизведением на прежней конфигурации), а не «баг Docker Desktop», как было сформулировано в исходном отчёте);
+- выбор конкретного образа `postgres:18-alpine` для этого runtime (точная версия была открытым вопросом по `ADR-0004`, раздел 36);
+- `.env.compose.example` (переменная `POSTGRES_HOST_PORT`, без реальных credentials);
+- обновления `.gitignore`, `README.md`.
+
+Не является production Compose-моделью из `ADR-0008` (backend/frontend/worker/PostgreSQL/reverse proxy) — это отдельная последующая задача. Бизнес-схема не создавалась.
+
+Подтверждено на этой ревизии: нативный Windows-Python (`backend/.venv`) через `127.0.0.1:55432` — Alembic (`upgrade head`, `current`), запущенный `fastapi dev`-сервер (`/health`, `/ready` реальным HTTP-запросом), опциональный integration-тест (`pytest -m integration`) — без временного контейнера как основного пути проверки.
 
 ## 5. Что ещё не утверждено
 
@@ -121,15 +131,15 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 7. Последняя завершённая задача
 
-Implementation Bootstrap.
+PostgreSQL Persistence Bootstrap.
 
 ## 8. Текущая задача
 
-PostgreSQL Persistence Bootstrap — на ревью.
+Local PostgreSQL Runtime — на ревью.
 
 ## 9. Следующий планируемый блок
 
-локальный PostgreSQL runtime/Compose и первая бизнес-схема.
+первая бизнес-схема (после утверждения Local PostgreSQL Runtime).
 
 ## 10. Обязательные документы для чтения перед любой задачей
 
