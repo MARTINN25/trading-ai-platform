@@ -1,6 +1,6 @@
 # ADR-0008 — Containerization and Single-Server Deployment
 
-**Статус:** На ревью
+**Статус:** Утверждён
 **Владелец решения:** Product Owner
 **Автор предложения:** Solution Architect
 **Дата:** 2026-08-05
@@ -18,7 +18,7 @@ Containerization and Single-Server Deployment
 
 ## 3. Статус
 
-На ревью
+Утверждён
 
 ## 4. Дата
 
@@ -576,13 +576,26 @@ ADR-0008 пересматривается, если:
 
 ## 59. Решение Product Owner
 
-На ревью.
+Утверждено. Product Owner фиксирует Docker Compose на одном сервере как production deployment-модель MVP.
+
+- backend, frontend, worker, PostgreSQL и reverse proxy разворачиваются как отдельные контейнеризованные сервисы;
+- Kubernetes, Docker Swarm, Nomad и multi-node orchestration для MVP не вводятся;
+- конкретный cloud provider не выбирается;
+- конкретный reverse proxy продукт не выбирается настоящим ADR;
+- наружу публикуется только reverse proxy;
+- PostgreSQL использует persistent volume и официально поддерживаемую backup/restore-процедуру;
+- образы фиксируются воспроизводимыми тегами или дайджестами, а не плавающим `latest`;
+- секреты не встраиваются в образы и не коммитятся в репозиторий;
+- контейнеры должны поддерживать health checks и graceful shutdown;
+- deployment должен поддерживать контролируемое обновление и rollback;
+- конкретные Dockerfile, Compose-файл, reverse proxy configuration, cloud/hosting provider, monitoring stack, CI/CD и числовые resource limits остаются отдельными implementation-решениями.
 
 ## 60. История изменений статуса
 
 | Дата | Статус | Кем изменён | Примечание |
 |---|---|---|---|
 | 2026-08-05 | На ревью | Claude (оформление по предложению Solution Architect) | создано предложение использовать Docker Compose single-server для контейнеризации backend/frontend/worker/PostgreSQL/reverse proxy без Kubernetes, multi-node оркестрации и без выбора конкретного cloud provider |
+| 2026-08-05 | Утверждён | Product Owner | принято решение использовать Docker Compose на одном сервере как production deployment-модель MVP для отдельных сервисов backend, frontend, worker, PostgreSQL и reverse proxy без Kubernetes и выбора конкретного cloud provider. |
 
 ## 61. Источники исследования
 
