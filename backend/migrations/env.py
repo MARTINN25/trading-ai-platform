@@ -22,13 +22,16 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from trading_ai.config import get_required_database_url
 from trading_ai.infrastructure.database.base import Base
 
+# Imported for its side effect of registering `watchlist_items` on
+# `Base.metadata` — required so `--autogenerate` can see it. Not used
+# directly in this module.
+from trading_ai.watchlist import models as _watchlist_models  # noqa: F401
+
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# No business models are mapped onto Base yet (bootstrap-only) — this
-# metadata is currently empty, matching the empty baseline migration.
 target_metadata = Base.metadata
 
 

@@ -16,6 +16,8 @@ from fastapi import FastAPI
 
 from trading_ai.api.routes.health import router as health_router
 from trading_ai.api.routes.ready import router as ready_router
+from trading_ai.api.routes.watchlist import register_watchlist_exception_handlers
+from trading_ai.api.routes.watchlist import router as watchlist_router
 from trading_ai.config import get_settings
 from trading_ai.infrastructure.database.engine import create_database_engine
 from trading_ai.infrastructure.database.session import create_session_factory
@@ -67,6 +69,8 @@ def create_app() -> FastAPI:
     )
     app.include_router(health_router)
     app.include_router(ready_router)
+    app.include_router(watchlist_router)
+    register_watchlist_exception_handlers(app)
     return app
 
 
