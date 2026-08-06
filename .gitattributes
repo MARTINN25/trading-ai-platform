@@ -13,6 +13,7 @@
 *.env.example   text eol=lf
 *.sh            text eol=lf
 *.py            text eol=lf
+*.mako          text eol=lf
 *.ts            text eol=lf
 *.tsx           text eol=lf
 *.js            text eol=lf
