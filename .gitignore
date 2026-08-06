@@ -12,3 +12,26 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Python (backend)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Node.js / Next.js (frontend)
+node_modules/
+.next/
+out/
+next-env.d.ts
+npm-debug.log*
+*.tsbuildinfo
+
+# Environment files (backend/frontend specific, in addition to root .env*)
+.env.local
+.env.*.local

@@ -41,3 +41,47 @@ docs/processes/       — инженерные процессы и реглам�
 ## Работа с Git
 
 Прямые изменения в `main` запрещены. Работа выполняется в отдельных короткоживущих ветках.
+
+## Локальный запуск (Implementation Bootstrap)
+
+Минимальный запускаемый каркас backend и frontend без бизнес-функций (`ADR-0001`, `ADR-0002`, `ADR-0003`). PostgreSQL, очередь, LLM-интеграция и авторизация ещё не подключены.
+
+### Backend (CPython 3.14, FastAPI)
+
+```
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+
+# запуск dev-сервера
+fastapi dev src/trading_ai/main.py
+
+# тесты
+python -m pytest -v
+
+# type-check
+python -m mypy src tests
+```
+
+Health-проверка: `GET http://127.0.0.1:8000/health` → `{"status": "ok"}`.
+
+Конфигурация читается из переменных окружения (`TRADING_AI_ENVIRONMENT`, `TRADING_AI_LOG_LEVEL`, `TRADING_AI_HOST`, `TRADING_AI_PORT`, `TRADING_AI_DEBUG`) — значений по умолчанию для секретов нет, секретов в репозитории нет.
+
+### Frontend (TypeScript strict, React, Next.js App Router)
+
+```
+cd frontend
+npm install
+
+# dev-сервер
+npm run dev
+
+# type-check
+npm run type-check
+
+# production build
+npm run build
+```
+
+Frontend не обращается к backend, БД или внешним API — это будет добавлено отдельными задачами.
