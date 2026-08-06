@@ -121,15 +121,15 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 7. Последняя завершённая задача
 
-ADR-0009-FINAL.
+Implementation Bootstrap.
 
 ## 8. Текущая задача
 
-Implementation Bootstrap — минимальный запускаемый каркас backend и frontend, на ревью.
+PostgreSQL Persistence Bootstrap — на ревью.
 
 ## 9. Следующий планируемый блок
 
-запуск и проверка bootstrap, затем PostgreSQL persistence bootstrap.
+локальный PostgreSQL runtime/Compose и первая бизнес-схема.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 

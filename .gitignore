@@ -9,6 +9,8 @@ Thumbs.db
 # Environment / secrets
 .env
 .env.*
+# ...but example files with no real secrets must stay tracked.
+!.env.example
 
 # Logs
 *.log

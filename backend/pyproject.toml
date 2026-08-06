@@ -5,12 +5,15 @@ description = "AI Trading Assistant Platform — backend bootstrap (no business 
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "fastapi[standard]>=0.115,<1",
+    "SQLAlchemy>=2.0,<3",
+    "asyncpg>=0.29,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0,<10",
     "mypy>=1.13,<3",
+    "alembic>=1.13,<2",
 ]
 
 [build-system]
@@ -22,6 +25,9 @@ packages = ["src/trading_ai"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: requires a real, reachable PostgreSQL instance (opt-in, not run by default)",
+]
 
 [tool.mypy]
 python_version = "3.14"
