@@ -125,11 +125,11 @@ ADR-0009-FINAL.
 
 ## 8. Текущая задача
 
-Отсутствует.
+Implementation Bootstrap — минимальный запускаемый каркас backend и frontend, на ревью.
 
 ## 9. Следующий планируемый блок
 
-Implementation Bootstrap — создание первого запускаемого каркаса backend и frontend.
+запуск и проверка bootstrap, затем PostgreSQL persistence bootstrap.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 
