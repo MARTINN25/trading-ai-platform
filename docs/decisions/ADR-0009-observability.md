@@ -1,6 +1,6 @@
 # ADR-0009 — Observability Strategy
 
-**Статус:** На ревью
+**Статус:** Утверждён
 **Владелец решения:** Product Owner
 **Автор предложения:** Solution Architect
 **Дата:** 2026-08-05
@@ -18,7 +18,7 @@ Observability Strategy
 
 ## 3. Статус
 
-На ревью
+Утверждён
 
 ## 4. Дата
 
@@ -611,7 +611,22 @@ ADR-0009 пересматривается, если:
 
 ## 60. Решение Product Owner
 
-На ревью.
+Утверждено. Product Owner фиксирует следующую observability-стратегию MVP:
+
+- structured logging обязателен для backend, frontend server-side, worker, PostgreSQL и reverse proxy;
+- request ID, correlation ID и trace ID являются отдельными идентификаторами с различной семантикой;
+- только trace ID и traceparent соответствуют W3C Trace Context;
+- correlation ID остаётся provider-neutral application-level идентификатором бизнес-операции;
+- обязательны redaction, PII masking и запрет секретов в логах;
+- обязательны health, readiness и liveness signals;
+- diagnostic endpoint должен быть внутренним или защищённым и не публикуется наружу автоматически;
+- RED/USE-показатели MVP являются локальными оперативными диагностическими сигналами без долговременной агрегированной истории;
+- p50/p95-подобные значения могут быть только approximate, если точный алгоритм агрегации отдельно не выбран;
+- автоматический alerting и долговременное time-series хранилище не входят в MVP;
+- полноценная observability platform и конкретный monitoring provider не выбираются настоящим ADR;
+- переход к отдельному observability stack требует отдельного ADR и доказанной эксплуатационной необходимости;
+- audit logging не заменяется диагностическими observability-логами;
+- конкретные logging libraries, metrics implementation, tracing SDK, diagnostic endpoint implementation, retention configuration, dashboards, alert rules и monitoring provider остаются implementation-решениями.
 
 ## 61. История изменений статуса
 
@@ -619,6 +634,7 @@ ADR-0009 пересматривается, если:
 |---|---|---|---|
 | 2026-08-05 | На ревью | Claude (оформление по предложению Solution Architect) | создано предложение принять structured logging и W3C Trace Context-совместимый trace ID (наряду с уже требуемым, отдельным по формату correlation ID) как обязательную основу observability MVP, отложив выбор monitoring provider и полноценную observability platform до доказанной необходимости |
 | 2026-08-05 | На ревью | Claude (ADR-0009-R1, по замечаниям ревью) | устранены внутренние противоречия без изменения статуса и базовой стратегии: честно зафиксировано, что MVP-стратегия не гарантирует проактивное обнаружение деградации до обращения пользователя без alerting; уточнены ограничения вычисляемых метрик (локальное окно, сброс при рестарте, отсутствие глобальной агрегации, приближённость p50/p95); уточнены правила health/diagnostic endpoint (лёгкий liveness, ограниченный readiness, внутренний/защищённый diagnostic endpoint, запрет раскрытия чувствительных данных); request ID/correlation ID/trace ID разделены как самостоятельные идентификаторы без единого формата; уточнена честная формулировка о `pg_stat_statements` как нерешённом кандидате |
+| 2026-08-05 | Утверждён | Product Owner | принято решение использовать structured logging, отдельные request/correlation/trace ID, W3C Trace Context-совместимый trace ID и локальные RED/USE diagnostic signals как основу observability MVP без автоматического alerting и без выбора конкретной observability platform. |
 
 ## 62. Источники исследования
 
