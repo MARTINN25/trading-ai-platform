@@ -169,11 +169,32 @@ try {
 
 Пустой/некорректный `ticker` (не только буквы/цифры/`.`/`-`, длиннее 15 символов) → `422`. Ответ никогда не содержит SQL-текста ошибки или stack trace — только `{"detail": "..."}`.
 
+#### CORS
+
+Backend по умолчанию **не** разрешает cross-origin запросы браузера. `main.py` включает минимальный `CORSMiddleware`, без credentials (`allow_credentials=False`), только `GET`/`POST`, только `Content-Type` в разрешённых заголовках; список origins задаётся через `TRADING_AI_CORS_ORIGINS` (парсинг централизован в `config.py`) — **не** захардкожен в `main.py`.
+
+- `TRADING_AI_CORS_ORIGINS` — comma-separated список origins (значения обрезаются от пробелов, пустые элементы отбрасываются);
+- локальный default (если переменная не задана) — `http://localhost:3000,http://127.0.0.1:3000` (локальный frontend-dev-сервер);
+- production origins задаются той же переменной в production-окружении — это отдельная deployment-конфигурация, а не значение по умолчанию из кода (`ADR-0002`, раздел 13);
+- `allow_origins=["*"]` не используется никогда;
+- credentials (cookies/auth headers) не используются и не планируются этим механизмом.
+
+```powershell
+# пример переопределения для production/staging
+$env:TRADING_AI_CORS_ORIGINS = "https://app.example.com,https://admin.example.com"
+```
+
 ### Frontend (TypeScript strict, React, Next.js App Router)
 
-```
+Frontend — отдельный клиент FastAPI Application API (`ADR-0003`): не обращается к БД, market/news API или LLM напрямую, только к backend через HTTP.
+
+```powershell
 cd frontend
 npm install
+
+# один раз: создать локальный .env.local (не коммитится)
+Copy-Item ".env.example" ".env.local"
+# по умолчанию NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 — подходит, если backend запущен локально на этом порту
 
 # dev-сервер
 npm run dev
@@ -185,4 +206,17 @@ npm run type-check
 npm run build
 ```
 
-Frontend не обращается к backend, БД или внешним API — это будет добавлено отдельными задачами.
+`NEXT_PUBLIC_API_BASE_URL` — публичный (не секретный) browser-side URL backend'а: префикс `NEXT_PUBLIC_` означает, что Next.js встраивает значение в клиентский bundle (`ADR-0003`, раздел 25). `frontend/.env.example` документирует переменную и отслеживается git; `frontend/.env.local` — реальный локальный файл, гitignored, никогда не коммитится. Если переменная не задана, API-клиент (`frontend/src/lib/watchlist-api.ts`) использует тот же development-default — заданный в одном централизованном месте, а не захардкоженный в компонентах.
+
+#### Watchlist UI
+
+После того как Postgres (см. выше) и backend (`fastapi dev src/trading_ai/main.py`, `127.0.0.1:8000`) запущены, а frontend — на `http://localhost:3000`:
+
+1. открыть `http://localhost:3000` — отображается текущий watchlist (или пустое состояние: «Watchlist пуст. Добавьте первый тикер выше.»);
+2. ввести тикер (например, `AAPL`) в поле «Тикер» и нажать «Добавить» (или Enter) — запись появляется в списке без перезагрузки страницы;
+3. повторное добавление того же тикера → понятная ошибка «Такой тикер уже есть в списке.» рядом с формой;
+4. пустой ввод → «Введите тикер.»;
+5. перезагрузка страницы (`F5`) — добавленный тикер остаётся: список реально читается из PostgreSQL при каждой загрузке (`cache: "no-store"`);
+6. если backend недоступен — «Не удалось соединиться с сервером...» и кнопка «Повторить» (без автоматических бесконечных retry).
+
+Frontend не создаёт своего backend-эндпоинта — использует только существующие `GET /watchlist` и `POST /watchlist`. Удаление/редактирование записей UI не поддерживает — этого не поддерживает и backend.

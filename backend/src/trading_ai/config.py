@@ -24,6 +24,22 @@ def _get_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Local-dev default only — not a production allowlist. Production
+# origins are supplied via TRADING_AI_CORS_ORIGINS (ADR-0002, §13:
+# production CORS policy is a separate deployment decision).
+_DEFAULT_CORS_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
+
+
+def _get_cors_origins(name: str, default: str) -> tuple[str, ...]:
+    """Comma-separated origins, trimmed, with empty entries dropped.
+
+    Centralized here so `main.py` never parses this itself — it only
+    reads `Settings.cors_origins`.
+    """
+    raw = os.environ.get(name, default)
+    return tuple(origin for origin in (item.strip() for item in raw.split(",")) if origin)
+
+
 @dataclass(frozen=True)
 class Settings:
     environment: str
@@ -32,6 +48,7 @@ class Settings:
     port: int
     debug: bool
     database_url: str | None
+    cors_origins: tuple[str, ...]
 
 
 def get_settings() -> Settings:
@@ -48,6 +65,7 @@ def get_settings() -> Settings:
         port=int(os.environ.get("TRADING_AI_PORT", "8000")),
         debug=_get_bool("TRADING_AI_DEBUG", False),
         database_url=os.environ.get("TRADING_AI_DATABASE_URL") or None,
+        cors_origins=_get_cors_origins("TRADING_AI_CORS_ORIGINS", _DEFAULT_CORS_ORIGINS),
     )
 
 

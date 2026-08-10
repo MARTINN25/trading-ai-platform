@@ -53,17 +53,16 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
-Watchlist Vertical Slice (ветка `feat/watchlist-vertical-slice`) — первый маленький сквозной backend use case поверх реального PostgreSQL:
+Watchlist Frontend Integration (ветка `feat/watchlist-frontend-integration`) — первый реальный UI поверх существующих `GET /watchlist` / `POST /watchlist`:
 
-- domain: immutable `WatchlistItem` (`trading_ai/watchlist/domain.py`), нормализация тикера (trim/uppercase/непустой/≤15 символов/безопасный набор символов), не связана с SQLAlchemy;
-- persistence: `WatchlistItemModel` → таблица `watchlist_items` (id identity PK, `ticker` с unique constraint, `created_at timestamptz` с server-side `now()`, без JSONB, без soft delete, без `updated_at`);
-- migration `0002_watchlist_items` (после `0001_initial_baseline`, с корректным `downgrade`), не затрагивает бизнес-схему сверх этой таблицы;
-- repository: конкретный `WatchlistRepository` (не generic), не коммитит — транзакционная граница у `session_scope`; duplicate обнаруживается через flush и UNIQUE constraint, не через предварительный `SELECT`;
-- application: `AddWatchlistItem`, `ListWatchlistItems`;
-- API: `POST /watchlist` (`201`/`409`/`422`), `GET /watchlist` (`200`) — route handler не содержит SQL и не создаёт engine напрямую (ADR-0002, раздел 17);
-- не добавлены: сделки, позиции, портфели, market data, LLM, auth, frontend-интеграция, background jobs, WebSocket, Redis, generic repository/service locator/CQRS/event bus.
+- typed API client `frontend/src/lib/watchlist-api.ts` — только `fetch`, без axios/React Query/SWR/Redux/Zustand; `WatchlistItem`/`CreateWatchlistItemRequest` типы; 409/422/network преобразуются в `WatchlistApiError` с фиксированными русскоязычными сообщениями (backend `detail` — английский/технический, читается защищённо, но пользователю не показывается — `ADR-0003`, раздел 24, 27);
+- client component `frontend/src/components/WatchlistPanel.tsx` («use client») — вся интерактивность (форма, список, состояния loading/loaded/empty/submitting/error/duplicate/invalid), `page.tsx` остаётся Server Component и только собирает страницу;
+- `NEXT_PUBLIC_API_BASE_URL` — публичная browser-side переменная (`frontend/.env.example` отслеживается git, `frontend/.env.local` — gitignored), development-default централизован в одном месте API-клиента;
+- `frontend/src/app/globals.css` — простой CSS без framework, responsive, без внешних шрифтов/изображений;
+- backend: добавлен минимальный dev-only `CORSMiddleware` (`main.py`) — только `http://localhost:3000`/`http://127.0.0.1:3000`, без credentials, только `GET`/`POST`; production CORS-политика этим не определяется (`ADR-0002`, раздел 13); добавлен `tests/test_cors.py`;
+- не добавлены: auth, delete/edit watchlist, market data, WebSocket, worker, Redis, LLM, Dockerfile, reverse proxy, CI/CD, design system, generic API framework, generic repository, frontend test runner (type-check + build + реальная browser-проверка вместо Jest/Vitest/Playwright как постоянной инфраструктуры).
 
-Не является полной бизнес-моделью платформы — только первый вертикальный срез. Реально проверено: миграция и downgrade/upgrade-цикл, `pytest -v`, `mypy --strict`, integration-тесты и ручные HTTP-запросы против нативного Windows-backend и Compose PostgreSQL (`127.0.0.1:55432`); тестовые данные удалены после проверки.
+Реально проверено: `npm run type-check`, `npm run build`, backend `pytest -v`/`mypy --strict` (после CORS-изменения), и полный ручной browser-сценарий (headless Chromium, включая настоящую остановку/перезапуск backend для network-error/retry) — empty state, добавление тикера без перезагрузки, duplicate/invalid ошибки, персистентность в PostgreSQL после reload, network-error state с кнопкой «Повторить» и восстановление после перезапуска backend. Тестовая запись `AAPL` удалена после проверки; dev-серверы остановлены.
 
 ## 5. Что ещё не утверждено
 
@@ -131,15 +130,15 @@ Watchlist Vertical Slice (ветка `feat/watchlist-vertical-slice`) — пер
 
 ## 7. Последняя завершённая задача
 
-Local PostgreSQL Runtime.
+Watchlist Vertical Slice.
 
 ## 8. Текущая задача
 
-Watchlist Vertical Slice — на ревью.
+Watchlist Frontend Integration — на ревью.
 
 ## 9. Следующий планируемый блок
 
-frontend-интеграция с watchlist либо следующая доменная сущность — после ревью Watchlist Vertical Slice.
+финализация UI slice, затем выбор следующего vertical slice — после ревью Watchlist Frontend Integration.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 
