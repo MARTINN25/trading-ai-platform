@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from trading_ai.market_data.gateway import TwelveDataGateway
+from trading_ai.market_data.news_gateway import FinnhubNewsGateway
 from trading_ai.market_data.types import (
     InvalidPeriodError,
     MarketDataError,
@@ -25,7 +26,11 @@ from trading_ai.market_data.types import (
     MarketDataTimeoutError,
     TickerUnsupportedError,
 )
-from trading_ai.market_data.use_cases import GetInstrumentDetails, GetInstrumentPriceHistory
+from trading_ai.market_data.use_cases import (
+    GetInstrumentDetails,
+    GetInstrumentNews,
+    GetInstrumentPriceHistory,
+)
 
 router = APIRouter()
 
@@ -73,6 +78,29 @@ class InstrumentHistoryResponse(BaseModel):
     points: list[InstrumentHistoryPointResponse]
 
 
+class InstrumentNewsItemResponse(BaseModel):
+    """`summary` is `None`, not an invented placeholder, whenever the
+    provider didn't return one — never substituted with empty text."""
+
+    id: str
+    headline: str
+    source: str
+    published_at: datetime
+    url: str
+    summary: str | None = None
+
+
+class InstrumentNewsResponse(BaseModel):
+    """`items` is always newest-first and capped at a fixed size (see
+    `news_gateway.FinnhubNewsGateway`) — never provider-controlled
+    pagination. An empty `items` list is a valid, non-error response,
+    same as an empty `points` list for history."""
+
+    ticker: str
+    source: str
+    items: list[InstrumentNewsItemResponse]
+
+
 def get_market_data_gateway(request: Request) -> TwelveDataGateway:
     """Return the gateway created by the lifespan, or fail controlled.
 
@@ -99,6 +127,24 @@ def get_instrument_price_history_use_case(
     gateway: Annotated[TwelveDataGateway, Depends(get_market_data_gateway)],
 ) -> GetInstrumentPriceHistory:
     return GetInstrumentPriceHistory(gateway)
+
+
+def get_news_gateway(request: Request) -> FinnhubNewsGateway:
+    """Same optional-feature pattern as `get_market_data_gateway`, a
+    separate provider/secret (`TRADING_AI_NEWS_API_KEY` -> Finnhub)."""
+    gateway = getattr(request.app.state, "news_gateway", None)
+    if gateway is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="news is not configured",
+        )
+    return gateway  # type: ignore[no-any-return]
+
+
+def get_instrument_news_use_case(
+    gateway: Annotated[FinnhubNewsGateway, Depends(get_news_gateway)],
+) -> GetInstrumentNews:
+    return GetInstrumentNews(gateway)
 
 
 @router.get("/instruments/{ticker}", response_model=InstrumentDetailsResponse)
@@ -138,6 +184,29 @@ async def get_instrument_price_history(
         points=[
             InstrumentHistoryPointResponse(timestamp=point.timestamp, close=point.close)
             for point in history.points
+        ],
+    )
+
+
+@router.get("/instruments/{ticker}/news", response_model=InstrumentNewsResponse)
+async def get_instrument_news(
+    ticker: str,
+    use_case: Annotated[GetInstrumentNews, Depends(get_instrument_news_use_case)],
+) -> InstrumentNewsResponse:
+    news = await use_case.execute(ticker)
+    return InstrumentNewsResponse(
+        ticker=news.ticker,
+        source=news.source,
+        items=[
+            InstrumentNewsItemResponse(
+                id=item.id,
+                headline=item.headline,
+                source=item.source,
+                published_at=item.published_at,
+                url=item.url,
+                summary=item.summary,
+            )
+            for item in news.items
         ],
     )
 

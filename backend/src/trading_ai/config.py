@@ -50,6 +50,7 @@ class Settings:
     database_url: str | None
     cors_origins: tuple[str, ...]
     market_data_api_key: str | None
+    news_api_key: str | None
 
 
 def get_settings() -> Settings:
@@ -72,6 +73,11 @@ def get_settings() -> Settings:
         # /watchlist/quotes) is disabled, not the whole application,
         # when unset.
         market_data_api_key=os.environ.get("TRADING_AI_MARKET_DATA_API_KEY") or None,
+        # Separate secret for a separate provider (Finnhub, news only —
+        # see market_data/news_gateway.py for why Twelve Data couldn't
+        # cover this). Same optional-feature pattern: unset disables
+        # only GET /instruments/{ticker}/news, nothing else.
+        news_api_key=os.environ.get("TRADING_AI_NEWS_API_KEY") or None,
     )
 
 

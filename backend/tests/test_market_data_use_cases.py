@@ -9,25 +9,35 @@ import pytest
 
 from trading_ai.market_data.types import (
     InstrumentHistoryPeriod,
+    InstrumentNews,
+    InstrumentNewsItem,
     InstrumentSnapshot,
     InvalidPeriodError,
+    MarketDataUnavailableError,
     PriceHistory,
     PricePoint,
 )
-from trading_ai.market_data.use_cases import GetInstrumentDetails, GetInstrumentPriceHistory
+from trading_ai.market_data.use_cases import (
+    GetInstrumentDetails,
+    GetInstrumentNews,
+    GetInstrumentPriceHistory,
+)
 from trading_ai.watchlist.domain import InvalidTickerError
 
 
 class FakeInstrumentGateway:
-    """In-memory test double — mirrors `TwelveDataGateway`'s methods, no httpx."""
+    """In-memory test double — mirrors `TwelveDataGateway`'s/`FinnhubNewsGateway`'s
+    methods, no httpx."""
 
     def __init__(
         self,
         snapshot: InstrumentSnapshot | None = None,
         history: PriceHistory | None = None,
+        news: InstrumentNews | None = None,
     ) -> None:
         self._snapshot = snapshot
         self._history = history
+        self._news = news
         self.received_ticker: str | None = None
         self.received_period: InstrumentHistoryPeriod | None = None
 
@@ -43,6 +53,11 @@ class FakeInstrumentGateway:
         self.received_period = period
         assert self._history is not None
         return self._history
+
+    async def get_instrument_news(self, ticker: str) -> InstrumentNews:
+        self.received_ticker = ticker
+        assert self._news is not None
+        return self._news
 
 
 def _snapshot(ticker: str = "AAPL") -> InstrumentSnapshot:
@@ -79,6 +94,22 @@ def _history(
             ),
         ),
     )
+
+
+def _news(ticker: str = "AAPL", items: tuple[InstrumentNewsItem, ...] | None = None) -> InstrumentNews:
+    if items is None:
+        items = (
+            InstrumentNewsItem(
+                id="1",
+                ticker=ticker,
+                headline="Apple stock rises",
+                source="Reuters",
+                published_at=datetime.now(timezone.utc),
+                url="https://example.com/article",
+                summary="Apple stock rose today.",
+            ),
+        )
+    return InstrumentNews(ticker=ticker, source="finnhub", items=items)
 
 
 @pytest.mark.anyio
@@ -163,3 +194,59 @@ async def test_get_instrument_price_history_successful_return() -> None:
     assert history.ticker == "AAPL"
     assert history.source == "twelvedata"
     assert history.points[0].close == Decimal("306.62")
+
+
+@pytest.mark.anyio
+async def test_get_instrument_news_normalizes_ticker_before_calling_gateway() -> None:
+    gateway = FakeInstrumentGateway(news=_news())
+    use_case = GetInstrumentNews(gateway)
+
+    news = await use_case.execute("  aapl  ")
+
+    assert gateway.received_ticker == "AAPL"
+    assert news.ticker == "AAPL"
+
+
+@pytest.mark.anyio
+async def test_get_instrument_news_invalid_ticker_raises_before_gateway_call() -> None:
+    gateway = FakeInstrumentGateway()
+    use_case = GetInstrumentNews(gateway)
+
+    with pytest.raises(InvalidTickerError):
+        await use_case.execute("")
+
+    assert gateway.received_ticker is None
+
+
+@pytest.mark.anyio
+async def test_get_instrument_news_successful_return() -> None:
+    gateway = FakeInstrumentGateway(news=_news())
+    use_case = GetInstrumentNews(gateway)
+
+    news = await use_case.execute("AAPL")
+
+    assert news.source == "finnhub"
+    assert len(news.items) == 1
+    assert news.items[0].headline == "Apple stock rises"
+
+
+@pytest.mark.anyio
+async def test_get_instrument_news_empty_list_is_returned_as_is() -> None:
+    gateway = FakeInstrumentGateway(news=_news(items=()))
+    use_case = GetInstrumentNews(gateway)
+
+    news = await use_case.execute("AAPL")
+
+    assert news.items == ()
+
+
+@pytest.mark.anyio
+async def test_get_instrument_news_provider_error_propagates() -> None:
+    class _FailingGateway:
+        async def get_instrument_news(self, ticker: str) -> InstrumentNews:
+            raise MarketDataUnavailableError("boom")
+
+    use_case = GetInstrumentNews(_FailingGateway())
+
+    with pytest.raises(MarketDataUnavailableError):
+        await use_case.execute("AAPL")

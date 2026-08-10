@@ -21,9 +21,11 @@ import os
 import pytest
 
 from trading_ai.market_data.gateway import TwelveDataGateway
+from trading_ai.market_data.news_gateway import FinnhubNewsGateway
 from trading_ai.market_data.types import InstrumentHistoryPeriod
 
 _LIVE_API_KEY = os.environ.get("TRADING_AI_LIVE_MARKET_DATA_API_KEY")
+_LIVE_NEWS_API_KEY = os.environ.get("TRADING_AI_LIVE_NEWS_API_KEY")
 
 
 @pytest.mark.live_provider
@@ -69,3 +71,31 @@ def test_live_market_data_price_history_smoke() -> None:
     assert all(point.timestamp.tzinfo is not None for point in history.points)
     timestamps = [point.timestamp for point in history.points]
     assert timestamps == sorted(timestamps)
+
+
+@pytest.mark.live_provider
+@pytest.mark.skipif(
+    not _LIVE_NEWS_API_KEY,
+    reason=(
+        "TRADING_AI_LIVE_NEWS_API_KEY is not set - skipping live news "
+        "provider smoke test (opt-in only)."
+    ),
+)
+def test_live_instrument_news_smoke() -> None:
+    """One real call (task scope §12: "не тратить десятки API calls")."""
+    assert _LIVE_NEWS_API_KEY is not None
+    gateway = FinnhubNewsGateway(api_key=_LIVE_NEWS_API_KEY)
+
+    news = asyncio.run(gateway.get_instrument_news("AAPL"))
+
+    assert news.ticker == "AAPL"
+    assert news.source == "finnhub"
+    assert len(news.items) >= 0
+    if news.items:
+        for item in news.items:
+            assert item.headline != ""
+            assert item.source != ""
+            assert item.published_at.tzinfo is not None
+            assert item.url.startswith("http://") or item.url.startswith("https://")
+        published_ats = [item.published_at for item in news.items]
+        assert published_ats == sorted(published_ats, reverse=True)

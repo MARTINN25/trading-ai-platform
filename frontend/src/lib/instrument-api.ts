@@ -54,6 +54,23 @@ export interface InstrumentPriceHistory {
   points: InstrumentHistoryPoint[];
 }
 
+export interface InstrumentNewsItem {
+  id: string;
+  headline: string;
+  source: string;
+  published_at: string;
+  url: string;
+  /** `null`, never an invented placeholder, when the provider didn't return one. */
+  summary: string | null;
+}
+
+export interface InstrumentNewsResponse {
+  ticker: string;
+  source: string;
+  /** Always newest-first, always capped at a fixed size — never provider-controlled pagination. */
+  items: InstrumentNewsItem[];
+}
+
 export type InstrumentApiErrorKind =
   | "invalid"
   | "not-found"
@@ -285,6 +302,101 @@ export async function getInstrumentPriceHistory(
   }
 
   if (!isInstrumentPriceHistory(data)) {
+    throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
+  }
+  return data;
+}
+
+function isInstrumentNewsItem(value: unknown): value is InstrumentNewsItem {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.headline === "string" &&
+    typeof candidate.source === "string" &&
+    typeof candidate.published_at === "string" &&
+    typeof candidate.url === "string" &&
+    isNullableString(candidate.summary)
+  );
+}
+
+function isInstrumentNewsResponse(value: unknown): value is InstrumentNewsResponse {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.ticker === "string" &&
+    typeof candidate.source === "string" &&
+    Array.isArray(candidate.items) &&
+    candidate.items.every(isInstrumentNewsItem)
+  );
+}
+
+/**
+ * Loads exactly once per instrument-page visit (the caller — see
+ * `InstrumentNewsSection.tsx` — fetches on mount and only again via an
+ * explicit user "Повторить" click, never automatically). No provider
+ * pagination/raw parameters are exposed here — the backend always
+ * decides the window and the cap (task scope §3, §10).
+ */
+export async function getInstrumentNews(ticker: string): Promise<InstrumentNewsResponse> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/instruments/${encodeURIComponent(ticker)}/news`, {
+      method: "GET",
+      cache: "no-store",
+    });
+  } catch {
+    throw new InstrumentApiError(
+      "network",
+      "Не удалось соединиться с сервером. Проверьте, что backend запущен, и повторите попытку."
+    );
+  }
+
+  if (response.status === 422) {
+    throw new InstrumentApiError(
+      "invalid",
+      "Некорректный тикер.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 504) {
+    throw new InstrumentApiError(
+      "timeout",
+      "Провайдер новостей не ответил вовремя. Попробуйте ещё раз.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 503) {
+    throw new InstrumentApiError(
+      "unavailable",
+      "Новости сейчас недоступны.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (!response.ok) {
+    const backendDetail = await readBackendDetail(response);
+    throw new InstrumentApiError(
+      "unexpected",
+      "Не удалось загрузить новости. Попробуйте ещё раз.",
+      backendDetail
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new InstrumentApiError("unexpected", "Backend вернул некорректный ответ.");
+  }
+
+  if (!isInstrumentNewsResponse(data)) {
     throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
   }
   return data;

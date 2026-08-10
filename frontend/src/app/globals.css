@@ -628,3 +628,124 @@ h2 {
     color: #aaa;
   }
 }
+
+/* Instrument news section */
+
+.instrument-news-section {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #ccc;
+}
+
+@media (prefers-color-scheme: dark) {
+  .instrument-news-section {
+    border-color: #444;
+  }
+}
+
+.instrument-news-section h2 {
+  margin-bottom: 0.75rem;
+}
+
+.instrument-news-loading,
+.instrument-news-empty {
+  color: #666;
+  font-style: italic;
+  font-size: 0.9rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .instrument-news-loading,
+  .instrument-news-empty {
+    color: #aaa;
+  }
+}
+
+.instrument-news-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  color: #b00020;
+}
+
+.instrument-news-error button {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.9rem;
+  border: 1px solid #444;
+  border-radius: 0.25rem;
+  background: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+  .instrument-news-error {
+    color: #ff6b6b;
+  }
+
+  .instrument-news-error button {
+    background: #e5e5e5;
+    color: #111;
+    border-color: #ccc;
+  }
+}
+
+.instrument-news-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.instrument-news-card {
+  padding: 0.85rem 1rem;
+  border: 1px solid #ccc;
+  border-radius: 0.25rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .instrument-news-card {
+    border-color: #444;
+  }
+}
+
+.instrument-news-headline {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.35rem;
+  line-height: 1.35;
+}
+
+.instrument-news-summary {
+  font-size: 0.9rem;
+  margin: 0 0 0.5rem;
+  color: inherit;
+  line-height: 1.4;
+}
+
+.instrument-news-meta {
+  font-size: 0.8rem;
+  color: #666;
+  margin: 0 0 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .instrument-news-meta {
+    color: #aaa;
+  }
+}
+
+.instrument-news-link {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+  color: inherit;
+}
+
+.instrument-news-link:hover,
+.instrument-news-link:focus-visible {
+  text-decoration: underline;
+}
