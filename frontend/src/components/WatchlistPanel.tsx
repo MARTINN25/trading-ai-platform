@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   addWatchlistItem,
   getWatchlist,
+  removeWatchlistItem,
   WatchlistApiError,
   type WatchlistItem,
 } from "@/lib/watchlist-api";
@@ -34,6 +35,8 @@ export default function WatchlistPanel() {
   const [submitting, setSubmitting] = useState(false);
   const [formErrorKind, setFormErrorKind] = useState<FormErrorKind>(null);
   const [formErrorMessage, setFormErrorMessage] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<number | null>(null);
+  const [deleteErrorMessage, setDeleteErrorMessage] = useState<string | null>(null);
 
   const loadWatchlist = useCallback(() => {
     setListState({ status: "loading" });
@@ -75,7 +78,9 @@ export default function WatchlistPanel() {
       );
     } catch (error) {
       if (error instanceof WatchlistApiError) {
-        setFormErrorKind(error.kind === "network" ? "unexpected" : error.kind);
+        setFormErrorKind(
+          error.kind === "duplicate" || error.kind === "invalid" ? error.kind : "unexpected"
+        );
         setFormErrorMessage(error.message);
       } else {
         setFormErrorKind("unexpected");
@@ -83,6 +88,28 @@ export default function WatchlistPanel() {
       }
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleRemove(id: number): Promise<void> {
+    setRemovingId(id);
+    setDeleteErrorMessage(null);
+
+    try {
+      await removeWatchlistItem(id);
+      // Only remove from local state after a confirmed 204 — no
+      // optimistic removal (backend stays source of truth).
+      setListState((previous) =>
+        previous.status === "loaded"
+          ? { status: "loaded", items: previous.items.filter((item) => item.id !== id) }
+          : previous
+      );
+    } catch (error) {
+      setDeleteErrorMessage(
+        error instanceof WatchlistApiError ? error.message : "Не удалось удалить тикер."
+      );
+    } finally {
+      setRemovingId(null);
     }
   }
 
@@ -140,10 +167,25 @@ export default function WatchlistPanel() {
               <li key={item.id}>
                 <span className="watchlist-ticker">{item.ticker}</span>
                 <span className="watchlist-created-at">{formatCreatedAt(item.created_at)}</span>
+                <button
+                  type="button"
+                  className="watchlist-remove-button"
+                  onClick={() => handleRemove(item.id)}
+                  disabled={removingId === item.id}
+                  aria-label={`Удалить ${item.ticker} из watchlist`}
+                >
+                  {removingId === item.id ? "Удаление…" : "Удалить"}
+                </button>
               </li>
             ))}
           </ul>
         )}
+
+        {deleteErrorMessage ? (
+          <p className="watchlist-delete-error" role="alert">
+            {deleteErrorMessage}
+          </p>
+        ) : null}
       </div>
     </section>
   );

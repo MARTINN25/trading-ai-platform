@@ -3,9 +3,10 @@
 Origins come from `Settings.cors_origins` (`TRADING_AI_CORS_ORIGINS`,
 parsed centrally in `config.py`), defaulting to the two local Next.js
 dev origins when unset. These tests verify: the dev-default origins
-are allowed, credentials are not enabled, an arbitrary origin is not
-reflected back, and a custom `TRADING_AI_CORS_ORIGINS` actually
-replaces the default — without exercising a real database.
+are allowed for GET/POST/DELETE, credentials are not enabled, an
+arbitrary origin is not reflected back, and a custom
+`TRADING_AI_CORS_ORIGINS` actually replaces the default — without
+exercising a real database.
 """
 
 from __future__ import annotations
@@ -45,6 +46,25 @@ def test_allowed_dev_origin_preflight_allows_post(monkeypatch: pytest.MonkeyPatc
 
     assert response.status_code == 200
     assert response.headers.get("access-control-allow-origin") == "http://127.0.0.1:3000"
+    assert "access-control-allow-credentials" not in response.headers
+
+
+def test_allowed_dev_origin_preflight_allows_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TRADING_AI_CORS_ORIGINS", raising=False)
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.options(
+        "/watchlist/1",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "DELETE",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
+    assert "DELETE" in response.headers.get("access-control-allow-methods", "")
     assert "access-control-allow-credentials" not in response.headers
 
 

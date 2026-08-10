@@ -1,8 +1,8 @@
 /**
  * Typed client for the existing FastAPI watchlist endpoints
- * (`GET /watchlist`, `POST /watchlist` — see
+ * (`GET /watchlist`, `POST /watchlist`, `DELETE /watchlist/{id}` — see
  * `backend/src/trading_ai/api/routes/watchlist.py`). No generic HTTP
- * client abstraction — just the two functions this UI needs, built on
+ * client abstraction — just the three functions this UI needs, built on
  * the built-in `fetch` (ADR-0003, §22.2: frontend uses the documented
  * HTTP contract; no axios/React Query/SWR).
  *
@@ -32,7 +32,12 @@ export interface CreateWatchlistItemRequest {
   ticker: string;
 }
 
-export type WatchlistApiErrorKind = "duplicate" | "invalid" | "network" | "unexpected";
+export type WatchlistApiErrorKind =
+  | "duplicate"
+  | "invalid"
+  | "not-found"
+  | "network"
+  | "unexpected";
 
 /** Thrown by every function in this module — always has a Russian, user-safe `message`. */
 export class WatchlistApiError extends Error {
@@ -166,4 +171,32 @@ export async function addWatchlistItem(ticker: string): Promise<WatchlistItem> {
     throw new WatchlistApiError("unexpected", "Backend вернул неожиданный формат данных.");
   }
   return data;
+}
+
+export async function removeWatchlistItem(id: number): Promise<void> {
+  const response = await doFetch(`/watchlist/${id}`, {
+    method: "DELETE",
+    cache: "no-store",
+  });
+
+  // 204 No Content — success, no body to read.
+  if (response.status === 204) {
+    return;
+  }
+
+  if (response.status === 404) {
+    const backendDetail = await readBackendDetail(response);
+    throw new WatchlistApiError(
+      "not-found",
+      "Запись уже удалена или не найдена.",
+      backendDetail
+    );
+  }
+
+  const backendDetail = await readBackendDetail(response);
+  throw new WatchlistApiError(
+    "unexpected",
+    "Не удалось удалить тикер. Попробуйте ещё раз.",
+    backendDetail
+  );
 }

@@ -53,16 +53,18 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
-Watchlist Frontend Integration (ветка `feat/watchlist-frontend-integration`) — первый реальный UI поверх существующих `GET /watchlist` / `POST /watchlist`:
+Watchlist Remove Item Vertical Slice (ветка `feat/watchlist-remove-item`) — удаление ticker из watchlist по `id`, PostgreSQL → backend → API → frontend:
 
-- typed API client `frontend/src/lib/watchlist-api.ts` — только `fetch`, без axios/React Query/SWR/Redux/Zustand; `WatchlistItem`/`CreateWatchlistItemRequest` типы; 409/422/network преобразуются в `WatchlistApiError` с фиксированными русскоязычными сообщениями (backend `detail` — английский/технический, читается защищённо, но пользователю не показывается — `ADR-0003`, раздел 24, 27);
-- client component `frontend/src/components/WatchlistPanel.tsx` («use client») — вся интерактивность (форма, список, состояния loading/loaded/empty/submitting/error/duplicate/invalid), `page.tsx` остаётся Server Component и только собирает страницу;
-- `NEXT_PUBLIC_API_BASE_URL` — публичная browser-side переменная (`frontend/.env.example` отслеживается git, `frontend/.env.local` — gitignored), development-default централизован в одном месте API-клиента;
-- `frontend/src/app/globals.css` — простой CSS без framework, responsive, без внешних шрифтов/изображений;
-- backend: добавлен минимальный dev-only `CORSMiddleware` (`main.py`) — только `http://localhost:3000`/`http://127.0.0.1:3000`, без credentials, только `GET`/`POST`; production CORS-политика этим не определяется (`ADR-0002`, раздел 13); добавлен `tests/test_cors.py`;
-- не добавлены: auth, delete/edit watchlist, market data, WebSocket, worker, Redis, LLM, Dockerfile, reverse proxy, CI/CD, design system, generic API framework, generic repository, frontend test runner (type-check + build + реальная browser-проверка вместо Jest/Vitest/Playwright как постоянной инфраструктуры).
+- domain: `WatchlistItemNotFoundError` (`trading_ai/watchlist/domain.py`), не HTTPException — как и остальные watchlist-ошибки;
+- repository: `WatchlistRepository.remove(item_id) -> bool` — один `DELETE ... RETURNING`, без скрытого commit; отсутствие строки не исключение (нет что переводить), а сигнал application-слою;
+- application: `RemoveWatchlistItem` — по `bool` из репозитория поднимает `WatchlistItemNotFoundError`; не знает про HTTP;
+- API: `DELETE /watchlist/{item_id}` — `204 No Content` без JSON body, `404` при отсутствии, нечисловой `item_id` → стандартный FastAPI `422`; ошибка централизованно преобразуется в HTTP через `register_watchlist_exception_handlers`, как и `DuplicateTickerError`/`InvalidTickerError`;
+- CORS: `allow_methods` расширен до `GET`/`POST`/`DELETE` (`main.py`, `TRADING_AI_CORS_ORIGINS` из предыдущей задачи не менялся);
+- frontend: `removeWatchlistItem(id)` в `watchlist-api.ts` (204→success, 404→`WatchlistApiError("not-found", ...)`, network/unexpected — по существующей безопасной модели, `backendDetail` не рендерится); кнопка «Удалить» на каждой записи в `WatchlistPanel.tsx` — `type="button"`, доступное имя (`aria-label`), `disabled` только для удаляемой записи, без optimistic removal (ждёт `204`), ошибка через `role="alert"`, без `window.confirm`;
+- удаление только по `id` (PK), не по `ticker`;
+- не добавлены: edit, bulk delete, undo, auth, market data, LLM, Redis, WebSocket, worker, Dockerfile, UI/state-management framework, generic repository/API client, новые зависимости.
 
-Реально проверено: `npm run type-check`, `npm run build`, backend `pytest -v`/`mypy --strict` (после CORS-изменения), и полный ручной browser-сценарий (headless Chromium, включая настоящую остановку/перезапуск backend для network-error/retry) — empty state, добавление тикера без перезагрузки, duplicate/invalid ошибки, персистентность в PostgreSQL после reload, network-error state с кнопкой «Повторить» и восстановление после перезапуска backend. Тестовая запись `AAPL` удалена после проверки; dev-серверы остановлены.
+Реально проверено: `pytest -v`/`mypy --strict`, integration-тесты (включая прямую проверку PostgreSQL после `DELETE` и повторный `DELETE` → `404`) против Compose PostgreSQL (`127.0.0.1:55432`), `npm run type-check`/`npm run build`, и полный ручной browser-сценарий (headless Chromium) — добавление, отображение, удаление без перезагрузки, персистентность отсутствия записи после reload, `DELETE` несуществующего `id` → реальный `404`, остановка backend во время удаления → безопасная network-ошибка с сохранением записи в UI, восстановление после перезапуска backend. Тестовые данные удалены; dev-серверы остановлены.
 
 ## 5. Что ещё не утверждено
 
@@ -130,15 +132,15 @@ Watchlist Frontend Integration (ветка `feat/watchlist-frontend-integration`
 
 ## 7. Последняя завершённая задача
 
-Watchlist Vertical Slice.
+Watchlist Frontend Integration.
 
 ## 8. Текущая задача
 
-Watchlist Frontend Integration — на ревью.
+Watchlist Remove Item Vertical Slice — на ревью.
 
 ## 9. Следующий планируемый блок
 
-финализация UI slice, затем выбор следующего vertical slice — после ревью Watchlist Frontend Integration.
+выбор следующего продуктового vertical slice — после ревью Watchlist Remove Item Vertical Slice.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 

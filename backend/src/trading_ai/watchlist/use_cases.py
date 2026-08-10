@@ -15,11 +15,17 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from trading_ai.watchlist.domain import WatchlistItem, normalize_ticker
+from trading_ai.watchlist.domain import (
+    WatchlistItem,
+    WatchlistItemNotFoundError,
+    normalize_ticker,
+)
 
 
 class _WatchlistRepositoryLike(Protocol):
     async def add(self, ticker: str) -> WatchlistItem: ...
+
+    async def remove(self, item_id: int) -> bool: ...
 
     async def list_all(self) -> list[WatchlistItem]: ...
 
@@ -31,6 +37,16 @@ class AddWatchlistItem:
     async def execute(self, raw_ticker: str) -> WatchlistItem:
         ticker = normalize_ticker(raw_ticker)
         return await self._repository.add(ticker)
+
+
+class RemoveWatchlistItem:
+    def __init__(self, repository: _WatchlistRepositoryLike) -> None:
+        self._repository = repository
+
+    async def execute(self, item_id: int) -> None:
+        deleted = await self._repository.remove(item_id)
+        if not deleted:
+            raise WatchlistItemNotFoundError(item_id)
 
 
 class ListWatchlistItems:
