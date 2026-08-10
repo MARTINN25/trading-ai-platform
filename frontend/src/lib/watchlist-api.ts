@@ -1,10 +1,11 @@
 /**
  * Typed client for the existing FastAPI watchlist endpoints
- * (`GET /watchlist`, `POST /watchlist`, `DELETE /watchlist/{id}` — see
+ * (`GET /watchlist`, `POST /watchlist`, `DELETE /watchlist/{id}`,
+ * `GET /watchlist/quotes` — see
  * `backend/src/trading_ai/api/routes/watchlist.py`). No generic HTTP
- * client abstraction — just the three functions this UI needs, built on
- * the built-in `fetch` (ADR-0003, §22.2: frontend uses the documented
- * HTTP contract; no axios/React Query/SWR).
+ * client abstraction — just the functions this UI needs, built on the
+ * built-in `fetch` (ADR-0003, §22.2: frontend uses the documented HTTP
+ * contract; no axios/React Query/SWR).
  *
  * Backend error `detail` strings are English/technical
  * (`trading_ai/watchlist/domain.py`) and are read defensively here,
@@ -12,6 +13,11 @@
  * Russian, and chosen from the HTTP status/failure kind (ADR-0003,
  * §24, §27: user-facing messages are fully Russian, technical detail
  * is not shown).
+ *
+ * Market data (`getWatchlistQuotes`) is read-only display data from
+ * the backend's market-data gateway — the browser never talks to the
+ * market-data provider or sees its API key (ADR-0003 §17: frontend
+ * never holds provider credentials).
  */
 
 const DEFAULT_DEV_API_BASE_URL = "http://127.0.0.1:8000";
@@ -30,6 +36,30 @@ export interface WatchlistItem {
 
 export interface CreateWatchlistItemRequest {
   ticker: string;
+}
+
+/**
+ * A watchlist row plus its best-effort quote. Numeric fields arrive as
+ * JSON strings (backend `Decimal` — exact financial precision, not a
+ * float) and are parsed with `Number()` only for display, never for
+ * further arithmetic here (ADR-0003 §17: frontend does not do
+ * business/financial computation, only presentation).
+ *
+ * Exactly one of `quote_error` / the price fields is set — never
+ * both, never neither. `quote_error` is a fixed safe category
+ * (`"timeout" | "rate_limited" | "unsupported" | "unavailable"`), not
+ * provider wording.
+ */
+export interface WatchlistItemQuote {
+  id: number;
+  ticker: string;
+  created_at: string;
+  price: string | null;
+  change: string | null;
+  change_percent: string | null;
+  as_of: string | null;
+  source: string | null;
+  quote_error: string | null;
 }
 
 export type WatchlistApiErrorKind =
@@ -62,6 +92,28 @@ function isWatchlistItem(value: unknown): value is WatchlistItem {
     typeof candidate.id === "number" &&
     typeof candidate.ticker === "string" &&
     typeof candidate.created_at === "string"
+  );
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isWatchlistItemQuote(value: unknown): value is WatchlistItemQuote {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === "number" &&
+    typeof candidate.ticker === "string" &&
+    typeof candidate.created_at === "string" &&
+    isNullableString(candidate.price) &&
+    isNullableString(candidate.change) &&
+    isNullableString(candidate.change_percent) &&
+    isNullableString(candidate.as_of) &&
+    isNullableString(candidate.source) &&
+    isNullableString(candidate.quote_error)
   );
 }
 
@@ -199,4 +251,42 @@ export async function removeWatchlistItem(id: number): Promise<void> {
     "Не удалось удалить тикер. Попробуйте ещё раз.",
     backendDetail
   );
+}
+
+export async function getWatchlistQuotes(): Promise<WatchlistItemQuote[]> {
+  const response = await doFetch("/watchlist/quotes", {
+    method: "GET",
+    // Same reasoning as getWatchlist(): always the current data, never
+    // a stale cached quote silently shown as fresh.
+    cache: "no-store",
+  });
+
+  if (response.status === 503) {
+    throw new WatchlistApiError(
+      "unexpected",
+      "Рыночные данные сейчас недоступны на backend.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (!response.ok) {
+    const backendDetail = await readBackendDetail(response);
+    throw new WatchlistApiError(
+      "unexpected",
+      "Не удалось загрузить рыночные данные. Попробуйте ещё раз.",
+      backendDetail
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new WatchlistApiError("unexpected", "Backend вернул некорректный ответ.");
+  }
+
+  if (!Array.isArray(data) || !data.every(isWatchlistItemQuote)) {
+    throw new WatchlistApiError("unexpected", "Backend вернул неожиданный формат данных.");
+  }
+  return data;
 }

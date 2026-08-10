@@ -179,6 +179,29 @@ try {
 
 Пустой/некорректный `ticker` (не только буквы/цифры/`.`/`-`, длиннее 15 символов) → `422`. Удаление всегда по числовому `id` (не по `ticker`) — успех отвечает `204 No Content` без тела, отсутствующий `id` → `404`, нечисловой `item_id` в пути → стандартный FastAPI `422`. Ответ никогда не содержит SQL-текста ошибки или stack trace — только `{"detail": "..."}`.
 
+#### Market data для watchlist
+
+`GET /watchlist/quotes` возвращает те же записи watchlist, что и `GET /watchlist`, плюс лучшую доступную рыночную котировку на каждый тикер: `price`, `change`, `change_percent`, `as_of`, `source`. Это **read-only** отображение — только для просмотра, **не торговое исполнение и не рекомендация**; market data нигде не сохраняется в `watchlist_items` и не является source of truth для watchlist (persistence watchlist не меняется этой задачей).
+
+**Provider — implementation decision, не архитектурное решение.** Конкретный market data provider не был предметом утверждённого ADR и явно отмечен неутверждённым в `.ai-context/CURRENT_STATE.md`. Как implementation decision для этого vertical slice выбран [Twelve Data](https://twelvedata.com/docs) — официальный документированный REST API, без scraping и reverse-engineered endpoints, с бесплатным tier. Смена provider в будущем не требует переписывать watchlist: `backend/src/trading_ai/market_data/types.py` — provider-neutral контракт (`MarketQuote`, error taxonomy), `backend/src/trading_ai/market_data/gateway.py` — единственное место, знающее про Twelve Data/httpx (по аналогии с `llm_gateway` adapter-слоем из `ADR-0007`, раздел 22).
+
+```powershell
+# один раз: получить бесплатный API key на twelvedata.com и добавить в окружение
+$env:TRADING_AI_MARKET_DATA_API_KEY = "<ваш ключ>"
+
+# получить watchlist с котировками
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/watchlist/quotes" -Method Get
+```
+
+Требования:
+
+- `TRADING_AI_MARKET_DATA_API_KEY` **опциональна** для запуска приложения — без неё всё остальное API работает как обычно, только `GET /watchlist/quotes` отвечает `503 {"detail": "market data is not configured"}`;
+- ключ передаётся provider'у только через HTTP-заголовок (`Authorization: apikey ...`), никогда как query-параметр URL — так он не попадает в логи HTTP-библиотек по умолчанию;
+- ключ никогда не логируется, не возвращается в API-ответе, не передаётся во frontend/browser — только backend обращается к provider'у;
+- один нерабочий тикер/provider-сбой не роняет весь список: элемент получает `"quote_error"` (`"timeout"`, `"rate_limited"`, `"unsupported"`, `"unavailable"`) вместо `price`/`change`/`as_of`, а не `0` и не выдуманные данные;
+- provider-запрос ограничен таймаутом (5 секунд), без автоматических retry;
+- тикеры запрашиваются последовательно, не параллельным веером — у Twelve Data нет официально документированного multi-symbol quote endpoint на базовом плане.
+
 #### CORS
 
 Backend по умолчанию **не** разрешает cross-origin запросы браузера. `main.py` включает минимальный `CORSMiddleware`, без credentials (`allow_credentials=False`), только `GET`/`POST`/`DELETE`, только `Content-Type` в разрешённых заголовках; список origins задаётся через `TRADING_AI_CORS_ORIGINS` (парсинг централизован в `config.py`) — **не** захардкожен в `main.py`.
@@ -229,6 +252,9 @@ npm run build
 5. кнопка «Удалить» у каждой записи — удаляет именно эту запись (без `window.confirm`) и убирает её из списка только после подтверждённого `204` от backend (без optimistic removal); во время удаления кнопка этой записи показывает «Удаление…» и отключена, остальной интерфейс остаётся доступен;
 6. если удаление не удалось — запись остаётся в списке, ошибка показывается через `role="alert"`;
 7. перезагрузка страницы (`F5`) — добавленный тикер остаётся, удалённый не возвращается: список реально читается из PostgreSQL при каждой загрузке (`cache: "no-store"`);
-8. если backend недоступен — «Не удалось соединиться с сервером...» и кнопка «Повторить» (без автоматических бесконечных retry).
+8. если backend недоступен — «Не удалось соединиться с сервером...» и кнопка «Повторить» (без автоматических бесконечных retry);
+9. рядом с каждым тикером — реальная цена (`$213.45`), абсолютное и процентное дневное изменение с явным знаком `+`/`-`/`±` в тексте (не только цветом) и время последней котировки («Обновлено: 17:42»);
+10. если котировка недоступна (provider timeout/rate limit/неизвестный тикер/сбой) — «Данные недоступны», никогда `0` и никогда придуманные числа;
+11. кнопка «Обновить данные» — одноразовая ручная перезагрузка списка и котировок; автоматического опроса/polling нет.
 
-Frontend не создаёт своего backend-эндпоинта — использует только существующие `GET /watchlist`, `POST /watchlist`, `DELETE /watchlist/{id}`. Редактирование записей UI не поддерживает — этого не поддерживает и backend.
+Frontend не создаёт своего backend-эндпоинта — использует только существующие `GET /watchlist`, `POST /watchlist`, `DELETE /watchlist/{id}`, `GET /watchlist/quotes`. Редактирование записей UI не поддерживает — этого не поддерживает и backend. Market data — только отображение: **не торговое исполнение и не рекомендация**.

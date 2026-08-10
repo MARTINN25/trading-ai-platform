@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response, status
@@ -18,6 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from trading_ai.infrastructure.database.session import session_scope
+from trading_ai.market_data.gateway import TwelveDataGateway
 from trading_ai.watchlist.domain import (
     DuplicateTickerError,
     InvalidTickerError,
@@ -28,7 +30,9 @@ from trading_ai.watchlist.repository import WatchlistRepository
 from trading_ai.watchlist.use_cases import (
     AddWatchlistItem,
     ListWatchlistItems,
+    ListWatchlistItemsWithQuotes,
     RemoveWatchlistItem,
+    WatchlistItemQuoteResult,
 )
 
 router = APIRouter()
@@ -55,6 +59,40 @@ class WatchlistItemResponse(BaseModel):
 
 def _to_response(item: WatchlistItem) -> WatchlistItemResponse:
     return WatchlistItemResponse(id=item.id, ticker=item.ticker, created_at=item.created_at)
+
+
+class WatchlistItemQuoteResponse(BaseModel):
+    """Watchlist item + best-effort quote — a superset DTO, not a raw provider payload.
+
+    `price`/`change`/`change_percent`/`as_of`/`source` are set only on
+    a successful quote; `quote_error` is a fixed safe category (never
+    provider wording) set only on failure. Never both/neither.
+    """
+
+    id: int
+    ticker: str
+    created_at: datetime
+    price: Decimal | None = None
+    change: Decimal | None = None
+    change_percent: Decimal | None = None
+    as_of: datetime | None = None
+    source: str | None = None
+    quote_error: str | None = None
+
+
+def _to_quote_response(result: WatchlistItemQuoteResult) -> WatchlistItemQuoteResponse:
+    quote = result.quote
+    return WatchlistItemQuoteResponse(
+        id=result.item.id,
+        ticker=result.item.ticker,
+        created_at=result.item.created_at,
+        price=quote.price if quote is not None else None,
+        change=quote.change if quote is not None else None,
+        change_percent=quote.change_percent if quote is not None else None,
+        as_of=quote.as_of if quote is not None else None,
+        source=quote.source if quote is not None else None,
+        quote_error=result.error,
+    )
 
 
 def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
@@ -110,6 +148,29 @@ def get_remove_watchlist_item_use_case(
     return RemoveWatchlistItem(repository)
 
 
+def get_market_data_gateway(request: Request) -> TwelveDataGateway:
+    """Return the gateway created by the lifespan, or fail controlled.
+
+    Same optional-feature pattern as `get_session_factory`: a generic
+    503 if `TRADING_AI_MARKET_DATA_API_KEY` is not configured, no
+    configuration detail leaked.
+    """
+    gateway = getattr(request.app.state, "market_data_gateway", None)
+    if gateway is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="market data is not configured",
+        )
+    return gateway  # type: ignore[no-any-return]
+
+
+def get_watchlist_quotes_use_case(
+    repository: Annotated[WatchlistRepository, Depends(get_watchlist_repository)],
+    gateway: Annotated[TwelveDataGateway, Depends(get_market_data_gateway)],
+) -> ListWatchlistItemsWithQuotes:
+    return ListWatchlistItemsWithQuotes(repository, gateway)
+
+
 @router.post(
     "/watchlist",
     status_code=status.HTTP_201_CREATED,
@@ -129,6 +190,20 @@ async def list_watchlist_items(
 ) -> list[WatchlistItemResponse]:
     items = await use_case.execute()
     return [_to_response(item) for item in items]
+
+
+@router.get("/watchlist/quotes", response_model=list[WatchlistItemQuoteResponse])
+async def list_watchlist_items_with_quotes(
+    use_case: Annotated[
+        ListWatchlistItemsWithQuotes, Depends(get_watchlist_quotes_use_case)
+    ],
+) -> list[WatchlistItemQuoteResponse]:
+    """Watchlist rows + best-effort market data (kept separate from
+    `GET /watchlist`, ADR-0002 §17: persistence and an external,
+    best-effort read stay decoupled — a provider outage never changes
+    what plain watchlist reads/writes mean)."""
+    results = await use_case.execute()
+    return [_to_quote_response(result) for result in results]
 
 
 @router.delete("/watchlist/{item_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -7,6 +7,10 @@ dependencies = [
     "fastapi[standard]>=0.115,<1",
     "SQLAlchemy>=2.0,<3",
     "asyncpg>=0.29,<1",
+    # Already an fastapi[standard] transitive dependency (used by
+    # TestClient) — declared explicitly now that market_data/gateway.py
+    # depends on it directly for the Twelve Data HTTP client.
+    "httpx>=0.27,<1",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +31,7 @@ packages = ["src/trading_ai"]
 testpaths = ["tests"]
 markers = [
     "integration: requires a real, reachable PostgreSQL instance (opt-in, not run by default)",
+    "live_provider: calls the real market-data provider over the network (opt-in, not run by default)",
 ]
 
 [tool.mypy]

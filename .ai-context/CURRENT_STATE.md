@@ -53,18 +53,18 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
-Watchlist Remove Item Vertical Slice (ветка `feat/watchlist-remove-item`) — удаление ticker из watchlist по `id`, PostgreSQL → backend → API → frontend:
+Watchlist Market Data Vertical Slice (ветка `feat/watchlist-market-data`) — реальные рыночные данные (price/change/change_percent/as_of/source) для каждого watchlist-тикера:
 
-- domain: `WatchlistItemNotFoundError` (`trading_ai/watchlist/domain.py`), не HTTPException — как и остальные watchlist-ошибки;
-- repository: `WatchlistRepository.remove(item_id) -> bool` — один `DELETE ... RETURNING`, без скрытого commit; отсутствие строки не исключение (нет что переводить), а сигнал application-слою;
-- application: `RemoveWatchlistItem` — по `bool` из репозитория поднимает `WatchlistItemNotFoundError`; не знает про HTTP;
-- API: `DELETE /watchlist/{item_id}` — `204 No Content` без JSON body, `404` при отсутствии, нечисловой `item_id` → стандартный FastAPI `422`; ошибка централизованно преобразуется в HTTP через `register_watchlist_exception_handlers`, как и `DuplicateTickerError`/`InvalidTickerError`;
-- CORS: `allow_methods` расширен до `GET`/`POST`/`DELETE` (`main.py`, `TRADING_AI_CORS_ORIGINS` из предыдущей задачи не менялся);
-- frontend: `removeWatchlistItem(id)` в `watchlist-api.ts` (204→success, 404→`WatchlistApiError("not-found", ...)`, network/unexpected — по существующей безопасной модели, `backendDetail` не рендерится); кнопка «Удалить» на каждой записи в `WatchlistPanel.tsx` — `type="button"`, доступное имя (`aria-label`), `disabled` только для удаляемой записи, без optimistic removal (ждёт `204`), ошибка через `role="alert"`, без `window.confirm`;
-- удаление только по `id` (PK), не по `ticker`;
-- не добавлены: edit, bulk delete, undo, auth, market data, LLM, Redis, WebSocket, worker, Dockerfile, UI/state-management framework, generic repository/API client, новые зависимости.
+- **provider — implementation decision, не ADR.** Конкретный market-data provider не был утверждённым архитектурным решением (`CURRENT_STATE.md`, раздел 5, «конкретные источники данных и лицензии»); задача была явно остановлена перед написанием production-кода, найденные варианты (Alpha Vantage/Finnhub/Twelve Data) и их ToS/rate-limit trade-offs представлены Product Owner; **Twelve Data выбран Product Owner как implementation decision** (официальный документированный REST API, без scraping, free-tier с API key) — это НЕ заменяет и не предвосхищает возможный будущий ADR, если provider станет жёсткой платформенной зависимостью;
+- `backend/src/trading_ai/market_data/` — `types.py` (provider-neutral `MarketQuote` + error taxonomy: unavailable/timeout/rate-limited/unsupported-ticker/malformed-response, mirrors `llm_gateway` pattern из `ADR-0007` §20–22, не HTTPException), `gateway.py` (единственное место с `httpx`/URL/response-shape Twelve Data; API key — только в HTTP-заголовке `Authorization`, никогда в query-параметре URL);
+- watchlist application: `ListWatchlistItemsWithQuotes` — последовательный (не параллельный, не unbounded fan-out) вызов gateway на каждый item; один сбойный ticker не роняет весь список — становится safe-категорией (`timeout`/`rate_limited`/`unsupported`/`unavailable`) в результате, не exception;
+- API: `GET /watchlist/quotes` — отдельный endpoint (не меняет контракт `GET /watchlist`), `503` если provider не сконфигурирован, `200` с `quote_error` на элемент при частичном сбое;
+- `TRADING_AI_MARKET_DATA_API_KEY` — опциональная env-переменная (как `TRADING_AI_DATABASE_URL`), без default; ключ не логируется, не возвращается в API, не передаётся во frontend;
+- **реальный инцидент, найденный и исправленный в этой же задаче:** `httpx`'s собственное INFO-логирование писало полный URL (с API key как query-параметром) в структурированные логи backend — исправлено централизованно в `trading_ai/logging.py` (httpx/httpcore logger level поднят до WARNING) и defense-in-depth в `gateway.py` (key переведён из query-параметра в заголовок); оба фикса покрыты regression-тестами и подтверждены живым вызовом Twelve Data после фикса — leak устранён, чистые логи (`operation`/`ticker`/`source`/`status`/`latency_ms`, без URL/key);
+- frontend: `getWatchlistQuotes()`/`WatchlistItemQuote` в `watchlist-api.ts`; `WatchlistPanel.tsx` показывает price/change/change_percent (явный `+`/`-`/`±` в тексте, не только цветом, plus aria-label направления)/as_of, «Данные недоступны» вместо `0`/выдумки, кнопка «Обновить данные» (одноразовая ручная загрузка, без auto-polling); add/delete теперь перезагружают список через тот же quotes-endpoint вместо локального сплайса — новая запись сразу получает котировку;
+- не добавлены: portfolio/trades/positions, LLM, charts, WebSocket, Redis, Kafka, worker, scheduled polling, caching layer, generic provider framework, UI/state-management framework, auth.
 
-Реально проверено: `pytest -v`/`mypy --strict`, integration-тесты (включая прямую проверку PostgreSQL после `DELETE` и повторный `DELETE` → `404`) против Compose PostgreSQL (`127.0.0.1:55432`), `npm run type-check`/`npm run build`, и полный ручной browser-сценарий (headless Chromium) — добавление, отображение, удаление без перезагрузки, персистентность отсутствия записи после reload, `DELETE` несуществующего `id` → реальный `404`, остановка backend во время удаления → безопасная network-ошибка с сохранением записи в UI, восстановление после перезапуска backend. Тестовые данные удалены; dev-серверы остановлены.
+Реально проверено: opt-in `live_provider`-маркированный smoke-тест против настоящего Twelve Data (отдельный файл, никогда не пересекается с обычным `-m integration`), реальные `GET /watchlist/quotes` для AAPL/MSFT (включая наблюдение настоящего `429 Too Many Requests` free-tier и корректную graceful-деградацию до «Данные недоступны»), `pytest -v`/`mypy --strict`, PostgreSQL integration-тесты (реальные watchlist rows + fake gateway — без живых provider-вызовов в обычном suite), `npm run type-check`/`npm run build`, полный ручной browser-сценарий (headless Chromium): реальные котировки, «Обновить данные», add/delete flow не сломаны. Поиск по репозиторию и scratch-файлам подтвердил отсутствие утечки ключа (`secret_leak_detected=false`). Тестовые данные (AAPL/MSFT) удалены; dev-серверы остановлены; PostgreSQL оставлен healthy.
 
 ## 5. Что ещё не утверждено
 
@@ -132,15 +132,15 @@ Watchlist Remove Item Vertical Slice (ветка `feat/watchlist-remove-item`) �
 
 ## 7. Последняя завершённая задача
 
-Watchlist Frontend Integration.
+Watchlist Remove Item Vertical Slice.
 
 ## 8. Текущая задача
 
-Watchlist Remove Item Vertical Slice — на ревью.
+Watchlist Market Data Vertical Slice — на ревью.
 
 ## 9. Следующий планируемый блок
 
-выбор следующего продуктового vertical slice — после ревью Watchlist Remove Item Vertical Slice.
+instrument details/chart либо следующий продуктовый vertical slice — после ревью Watchlist Market Data Vertical Slice.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 

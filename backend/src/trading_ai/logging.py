@@ -31,6 +31,16 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
+# Third-party libraries with their own INFO-level request logging that
+# would otherwise propagate to the root handler above. httpx (used by
+# trading_ai.market_data.gateway) logs the full request line —
+# including URL query parameters — at INFO by default; for a provider
+# that authenticates via a query param, that line would otherwise leak
+# the API key into our own structured logs. Raised to WARNING here,
+# centrally, so no future httpx/httpcore caller has to remember this.
+_NOISY_THIRD_PARTY_LOGGERS = ("httpx", "httpcore")
+
+
 def configure_logging(level: str = "INFO") -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(JSONFormatter())
@@ -38,3 +48,6 @@ def configure_logging(level: str = "INFO") -> None:
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level)
+
+    for name in _NOISY_THIRD_PARTY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
