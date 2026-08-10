@@ -524,3 +524,470 @@ async def test_get_price_history_no_secret_leakage_in_error_messages() -> None:
 
     assert _FAKE_API_KEY not in str(exc_info.value)
     assert _FAKE_API_KEY not in repr(exc_info.value)
+
+
+_SEARCH_PAYLOAD: dict[str, Any] = {
+    "data": [
+        {
+            "symbol": "AAPL",
+            "instrument_name": "Apple Inc.",
+            "exchange": "NASDAQ",
+            "mic_code": "XNGS",
+            "exchange_timezone": "America/New_York",
+            "instrument_type": "Common Stock",
+            "country": "United States",
+            "currency": "USD",
+        },
+        {
+            "symbol": "AAPL",
+            "instrument_name": "Apple Inc.",
+            "exchange": "BVC",
+            "mic_code": "XBOG",
+            "exchange_timezone": "America/New_York",
+            "instrument_type": "Common Stock",
+            "country": "Colombia",
+            "currency": "COP",
+        },
+    ],
+    "status": "ok",
+}
+
+
+@pytest.mark.anyio
+async def test_search_instruments_maps_successful_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["symbol"] == "Apple"
+        return httpx.Response(200, json=_SEARCH_PAYLOAD)
+
+    results = await _gateway(handler).search_instruments("Apple")
+
+    # _SEARCH_PAYLOAD's second entry (AAPL/BVC/Colombia) is excluded by
+    # the MVP US-common-stock filter (country != "United States") — see
+    # test_search_instruments_excludes_non_us_country_same_ticker.
+    assert len(results) == 1
+    first = results[0]
+    assert first.ticker == "AAPL"
+    assert first.name == "Apple Inc."
+    assert first.exchange == "NASDAQ"
+    assert first.instrument_type == "Common Stock"
+    assert first.currency == "USD"
+
+
+@pytest.mark.anyio
+async def test_search_instruments_excludes_non_us_country_same_ticker() -> None:
+    # AAPL NASDAQ/US vs AAPL BVC/Colombia (Product Owner decision, R2:
+    # US-listed equities only) — both entries are "Common Stock", only
+    # `country` differs, isolating the country criterion from the
+    # instrument_type criterion tested separately below.
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_SEARCH_PAYLOAD)
+
+    results = await _gateway(handler).search_instruments("Apple")
+
+    tickers = [result.ticker for result in results]
+    assert tickers == ["AAPL"]
+    assert results[0].exchange == "NASDAQ"
+    assert results[0].currency == "USD"
+
+
+@pytest.mark.anyio
+async def test_search_instruments_excludes_foreign_depositary_receipt_same_ticker() -> None:
+    # MSFT NASDAQ/US Common Stock vs MSFT BCBA/Argentina Depositary
+    # Receipt — real Twelve Data shapes (confirmed live, R2): the
+    # Argentina depositary receipt is provider-ranked *before* the
+    # NASDAQ listing for an exact "MSFT" query.
+    payload = {
+        "data": [
+            {
+                "symbol": "MSFT",
+                "instrument_name": "Microsoft Corp.",
+                "exchange": "BCBA",
+                "instrument_type": "Depositary Receipt",
+                "country": "Argentina",
+                "currency": "ARS",
+            },
+            {
+                "symbol": "MSFT",
+                "instrument_name": "Microsoft Corporation",
+                "exchange": "NASDAQ",
+                "instrument_type": "Common Stock",
+                "country": "United States",
+                "currency": "USD",
+            },
+        ],
+        "status": "ok",
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    results = await _gateway(handler).search_instruments("MSFT")
+
+    assert len(results) == 1
+    assert results[0].ticker == "MSFT"
+    assert results[0].exchange == "NASDAQ"
+    assert results[0].currency == "USD"
+
+
+@pytest.mark.anyio
+async def test_search_instruments_excludes_non_common_stock_instrument_types() -> None:
+    # All "United States" — only `instrument_type` varies. ETF,
+    # Depositary Receipt, Certificate, Warrant are excluded even though
+    # the country criterion alone would pass them (Product Owner
+    # decision, R2: US-listed *common stock* only, not "any US-country
+    # instrument").
+    payload = {
+        "data": [
+            {
+                "symbol": "MSFD",
+                "instrument_name": "Direxion Daily MSFT Bear 1X Shares",
+                "exchange": "NASDAQ",
+                "instrument_type": "ETF",
+                "country": "United States",
+                "currency": "USD",
+            },
+            {
+                "symbol": "MSFTUS1",
+                "instrument_name": "Some US Depositary Receipt",
+                "exchange": "OTC",
+                "instrument_type": "Depositary Receipt",
+                "country": "United States",
+                "currency": "USD",
+            },
+            {
+                "symbol": "MSFTUS2",
+                "instrument_name": "Some US Certificate",
+                "exchange": "OTC",
+                "instrument_type": "Certificate",
+                "country": "United States",
+                "currency": "USD",
+            },
+            {
+                "symbol": "MSFTUS3",
+                "instrument_name": "Some US Warrant",
+                "exchange": "OTC",
+                "instrument_type": "Warrant",
+                "country": "United States",
+                "currency": "USD",
+            },
+            {
+                "symbol": "MSFT",
+                "instrument_name": "Microsoft Corporation",
+                "exchange": "NASDAQ",
+                "instrument_type": "Common Stock",
+                "country": "United States",
+                "currency": "USD",
+            },
+        ],
+        "status": "ok",
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    results = await _gateway(handler).search_instruments("MSFT")
+
+    assert [result.ticker for result in results] == ["MSFT"]
+
+
+@pytest.mark.anyio
+async def test_search_instruments_deduplicates_same_ticker_across_exchanges() -> None:
+    # Both entries survive the US-common-stock filter (both "United
+    # States"/"Common Stock") — dedup is the only thing standing
+    # between this and two selectable-but-identical watchlist rows
+    # (ticker-only identity, `watchlist/models.py`). Keeps the first,
+    # highest-ranked (per provider order).
+    payload = {
+        "data": [
+            {
+                "symbol": "AAPL",
+                "instrument_name": "Apple Inc.",
+                "exchange": "NASDAQ",
+                "instrument_type": "Common Stock",
+                "country": "United States",
+                "currency": "USD",
+            },
+            {
+                "symbol": "AAPL",
+                "instrument_name": "Apple Inc.",
+                "exchange": "BATS",
+                "instrument_type": "Common Stock",
+                "country": "United States",
+                "currency": "USD",
+            },
+        ],
+        "status": "ok",
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    results = await _gateway(handler).search_instruments("Apple")
+
+    tickers = [result.ticker for result in results]
+    assert tickers == ["AAPL"]
+    assert results[0].exchange == "NASDAQ"
+
+
+@pytest.mark.anyio
+async def test_search_instruments_exact_ticker_match_ranked_first() -> None:
+    # Both entries survive the US-common-stock filter and have
+    # different tickers (dedup is a no-op here) — an exact-ticker query
+    # for "MSFT" should still rank MSFT first even though the provider
+    # lists an unrelated US common stock before it.
+    payload = {
+        "data": [
+            {
+                "symbol": "MSFU",
+                "instrument_name": "Some Other US Company",
+                "exchange": "NASDAQ",
+                "instrument_type": "Common Stock",
+                "country": "United States",
+                "currency": "USD",
+            },
+            {
+                "symbol": "MSFT",
+                "instrument_name": "Microsoft Corporation",
+                "exchange": "NASDAQ",
+                "instrument_type": "Common Stock",
+                "country": "United States",
+                "currency": "USD",
+            },
+        ],
+        "status": "ok",
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    results = await _gateway(handler).search_instruments("MSFT")
+
+    assert results[0].ticker == "MSFT"
+    assert {result.ticker for result in results} == {"MSFU", "MSFT"}
+
+
+@pytest.mark.anyio
+async def test_search_instruments_name_search_filters_to_us_common_stock() -> None:
+    # Realistic "Microsoft" name-search shape (fields confirmed live,
+    # R2): several non-US/non-common-stock listings that merely share
+    # the company name, plus the real NASDAQ common stock — only the
+    # latter should survive.
+    payload = {
+        "data": [
+            {
+                "symbol": "MSETNQ",
+                "instrument_name": "FRB Quanto ETN on Microsoft",
+                "exchange": "JSE",
+                "instrument_type": "ETF",
+                "country": "South Africa",
+                "currency": "ZAc",
+            },
+            {
+                "symbol": "4MSFT",
+                "instrument_name": "MICROSOFT",
+                "exchange": "MTA",
+                "instrument_type": "Common Stock",
+                "country": "Italy",
+                "currency": "EUR",
+            },
+            {
+                "symbol": "MSFT",
+                "instrument_name": "Microsoft Corp.",
+                "exchange": "BCBA",
+                "instrument_type": "Depositary Receipt",
+                "country": "Argentina",
+                "currency": "ARS",
+            },
+            {
+                "symbol": "MSFT",
+                "instrument_name": "Microsoft Corporation",
+                "exchange": "NASDAQ",
+                "instrument_type": "Common Stock",
+                "country": "United States",
+                "currency": "USD",
+            },
+        ],
+        "status": "ok",
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    results = await _gateway(handler).search_instruments("Microsoft")
+
+    assert len(results) == 1
+    assert results[0].ticker == "MSFT"
+    assert results[0].exchange == "NASDAQ"
+    assert results[0].currency == "USD"
+
+
+@pytest.mark.anyio
+async def test_search_instruments_empty_list_is_not_an_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [], "status": "ok"})
+
+    results = await _gateway(handler).search_instruments("zzzznotarealcompany")
+
+    assert results == []
+
+
+@pytest.mark.anyio
+async def test_search_instruments_malformed_item_is_skipped_not_fatal() -> None:
+    payload = {
+        "data": [
+            {
+                "symbol": "AAPL",
+                "instrument_name": "Apple Inc.",
+                "exchange": "NASDAQ",
+                "instrument_type": "Common Stock",
+                "country": "United States",
+            },
+            {"symbol": "", "instrument_name": "Missing ticker"},  # blank symbol -> skipped
+            {"instrument_name": "No symbol field at all"},  # missing symbol -> skipped
+            {"symbol": "NOSTRING", "instrument_name": None},  # non-string name -> skipped
+            "not even an object",  # non-dict item -> skipped
+        ],
+        "status": "ok",
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    results = await _gateway(handler).search_instruments("apple")
+
+    assert len(results) == 1
+    assert results[0].ticker == "AAPL"
+
+
+@pytest.mark.anyio
+async def test_search_instruments_optional_fields_missing_are_none() -> None:
+    # `country`/`instrument_type` are required by the US-common-stock
+    # filter (so `instrument_type` is always "Common Stock" on any
+    # surviving item) — `exchange`/`currency` remain genuinely optional
+    # on the output object.
+    payload = {
+        "data": [
+            {
+                "symbol": "AAPL",
+                "instrument_name": "Apple Inc.",
+                "country": "United States",
+                "instrument_type": "Common Stock",
+            }
+        ],
+        "status": "ok",
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    results = await _gateway(handler).search_instruments("apple")
+
+    assert results[0].exchange is None
+    assert results[0].instrument_type == "Common Stock"
+    assert results[0].currency is None
+
+
+@pytest.mark.anyio
+async def test_search_instruments_capped_at_result_limit() -> None:
+    payload = {
+        "data": [
+            {
+                "symbol": f"SYM{i}",
+                "instrument_name": f"Company {i}",
+                "country": "United States",
+                "instrument_type": "Common Stock",
+            }
+            for i in range(25)
+        ],
+        "status": "ok",
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    results = await _gateway(handler).search_instruments("a")
+
+    assert len(results) == 10
+
+
+@pytest.mark.anyio
+async def test_search_instruments_timeout_raises_timeout_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out")
+
+    with pytest.raises(MarketDataTimeoutError):
+        await _gateway(handler).search_instruments("apple")
+
+
+@pytest.mark.anyio
+async def test_search_instruments_rate_limited_raises_rate_limited_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"code": 429, "message": "limit", "status": "error"})
+
+    with pytest.raises(MarketDataRateLimitedError):
+        await _gateway(handler).search_instruments("apple")
+
+
+@pytest.mark.anyio
+async def test_search_instruments_provider_5xx_raises_unavailable() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="Service Unavailable")
+
+    with pytest.raises(MarketDataUnavailableError):
+        await _gateway(handler).search_instruments("apple")
+
+
+@pytest.mark.anyio
+async def test_search_instruments_network_error_raises_unavailable() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    with pytest.raises(MarketDataUnavailableError):
+        await _gateway(handler).search_instruments("apple")
+
+
+@pytest.mark.anyio
+async def test_search_instruments_malformed_json_raises_malformed_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not json at all")
+
+    with pytest.raises(MarketDataMalformedResponseError):
+        await _gateway(handler).search_instruments("apple")
+
+
+@pytest.mark.anyio
+async def test_search_instruments_missing_data_key_raises_malformed_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok"})
+
+    with pytest.raises(MarketDataMalformedResponseError):
+        await _gateway(handler).search_instruments("apple")
+
+
+@pytest.mark.anyio
+async def test_search_instruments_sends_api_key_as_header_not_query_param() -> None:
+    seen_url = ""
+    seen_auth_header = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_url, seen_auth_header
+        seen_url = str(request.url)
+        seen_auth_header = request.headers.get("Authorization", "")
+        return httpx.Response(200, json=_SEARCH_PAYLOAD)
+
+    await _gateway(handler).search_instruments("apple")
+
+    assert _FAKE_API_KEY not in seen_url
+    assert seen_auth_header == f"apikey {_FAKE_API_KEY}"
+
+
+@pytest.mark.anyio
+async def test_search_instruments_no_secret_leakage_in_error_messages() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="Service Unavailable")
+
+    with pytest.raises(MarketDataUnavailableError) as exc_info:
+        await _gateway(handler).search_instruments("apple")
+
+    assert _FAKE_API_KEY not in str(exc_info.value)
+    assert _FAKE_API_KEY not in repr(exc_info.value)

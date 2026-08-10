@@ -52,6 +52,7 @@ h2 {
 }
 
 .watchlist-form-row {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
@@ -114,6 +115,123 @@ h2 {
   .watchlist-list-error p,
   .watchlist-delete-error {
     color: #ff6b6b;
+  }
+}
+
+/* Instrument search dropdown (anchored under .watchlist-form-row) */
+
+.watchlist-search-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin-top: 0.25rem;
+  max-height: 16rem;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #888;
+  border-radius: 0.25rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  .watchlist-search-results {
+    background: #1a1a1a;
+    border-color: #555;
+  }
+}
+
+.watchlist-search-results ul {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem 0;
+}
+
+.watchlist-search-loading,
+.watchlist-search-empty {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.85rem;
+  color: #666;
+  font-style: italic;
+}
+
+@media (prefers-color-scheme: dark) {
+  .watchlist-search-loading,
+  .watchlist-search-empty {
+    color: #aaa;
+  }
+}
+
+.watchlist-search-error {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.85rem;
+  color: #b00020;
+}
+
+@media (prefers-color-scheme: dark) {
+  .watchlist-search-error {
+    color: #ff6b6b;
+  }
+}
+
+.watchlist-search-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+}
+
+.watchlist-search-result-highlighted,
+.watchlist-search-result:hover {
+  background: #f0f0f0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .watchlist-search-result-highlighted,
+  .watchlist-search-result:hover {
+    background: #2a2a2a;
+  }
+}
+
+.watchlist-search-result-ticker {
+  font-weight: 600;
+}
+
+.watchlist-search-result-name {
+  font-size: 0.9rem;
+  color: inherit;
+}
+
+.watchlist-search-result-meta {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: #666;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .watchlist-search-result-meta {
+    color: #aaa;
+  }
+}
+
+.watchlist-search-hint {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid #ddd;
+  font-size: 0.75rem;
+  color: #666;
+}
+
+@media (prefers-color-scheme: dark) {
+  .watchlist-search-hint {
+    border-top-color: #444;
+    color: #aaa;
   }
 }
 

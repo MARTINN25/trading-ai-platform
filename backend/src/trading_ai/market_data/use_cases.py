@@ -19,9 +19,11 @@ from typing import Protocol
 from trading_ai.market_data.types import (
     InstrumentHistoryPeriod,
     InstrumentNews,
+    InstrumentSearchResult,
     InstrumentSnapshot,
     PriceHistory,
     normalize_period,
+    normalize_search_query,
 )
 from trading_ai.watchlist.domain import normalize_ticker
 
@@ -74,3 +76,20 @@ class GetInstrumentNews:
     async def execute(self, raw_ticker: str) -> InstrumentNews:
         ticker = normalize_ticker(raw_ticker)
         return await self._gateway.get_instrument_news(ticker)
+
+
+class _SearchGatewayLike(Protocol):
+    async def search_instruments(self, query: str) -> list[InstrumentSearchResult]: ...
+
+
+class SearchInstruments:
+    """Read-only symbol/name search — same shape as `GetInstrumentDetails`:
+    depends only on the gateway, never opens a database session, never
+    persists anything."""
+
+    def __init__(self, gateway: _SearchGatewayLike) -> None:
+        self._gateway = gateway
+
+    async def execute(self, raw_query: str) -> list[InstrumentSearchResult]:
+        query = normalize_search_query(raw_query)
+        return await self._gateway.search_instruments(query)

@@ -29,6 +29,7 @@ from trading_ai.market_data.gateway import TwelveDataGateway
 from trading_ai.market_data.news_gateway import FinnhubNewsGateway
 from trading_ai.market_data.types import (
     InvalidPeriodError,
+    InvalidSearchQueryError,
     MarketDataError,
     MarketDataRateLimitedError,
     MarketDataTimeoutError,
@@ -38,6 +39,7 @@ from trading_ai.market_data.use_cases import (
     GetInstrumentDetails,
     GetInstrumentNews,
     GetInstrumentPriceHistory,
+    SearchInstruments,
 )
 
 router = APIRouter()
@@ -63,6 +65,28 @@ class InstrumentDetailsResponse(BaseModel):
     volume: int | None = None
     as_of: datetime
     source: str
+
+
+class InstrumentSearchResultResponse(BaseModel):
+    """Only the fields the UI actually needs — never Twelve Data's raw
+    `/symbol_search` item shape (e.g. `mic_code`/`exchange_timezone`
+    aren't carried, task scope §10: "search response не содержит
+    лишних provider fields")."""
+
+    ticker: str
+    name: str
+    exchange: str | None = None
+    instrument_type: str | None = None
+    currency: str | None = None
+
+
+class InstrumentSearchResponse(BaseModel):
+    """`items` is always capped at a fixed size (task scope §6:
+    "максимум 10 результатов") — never provider-controlled pagination.
+    An empty `items` list is a valid, non-error response."""
+
+    query: str
+    items: list[InstrumentSearchResultResponse]
 
 
 class InstrumentHistoryPointResponse(BaseModel):
@@ -153,6 +177,12 @@ def get_instrument_price_history_use_case(
     return GetInstrumentPriceHistory(gateway)
 
 
+def get_search_instruments_use_case(
+    gateway: Annotated[TwelveDataGateway, Depends(get_market_data_gateway)],
+) -> SearchInstruments:
+    return SearchInstruments(gateway)
+
+
 def get_news_gateway(request: Request) -> FinnhubNewsGateway:
     """Same optional-feature pattern as `get_market_data_gateway`, a
     separate provider/secret (`TRADING_AI_NEWS_API_KEY` -> Finnhub)."""
@@ -210,6 +240,32 @@ def get_generate_instrument_analysis_use_case(
         history_use_case=GetInstrumentPriceHistory(market_gateway),
         news_use_case=news_use_case,
         ai_gateway=ai_gateway,
+    )
+
+
+@router.get("/instruments/search", response_model=InstrumentSearchResponse)
+async def search_instruments(
+    q: str,
+    use_case: Annotated[SearchInstruments, Depends(get_search_instruments_use_case)],
+) -> InstrumentSearchResponse:
+    """Registered *before* `GET /instruments/{ticker}` below — Starlette
+    matches routes in registration order, and `/instruments/{ticker}`
+    would otherwise swallow `/instruments/search` requests as
+    `ticker="search"` (task scope §6: a clean, unambiguous REST
+    contract)."""
+    results = await use_case.execute(q)
+    return InstrumentSearchResponse(
+        query=q.strip(),
+        items=[
+            InstrumentSearchResultResponse(
+                ticker=result.ticker,
+                name=result.name,
+                exchange=result.exchange,
+                instrument_type=result.instrument_type,
+                currency=result.currency,
+            )
+            for result in results
+        ],
     )
 
 
@@ -364,6 +420,15 @@ def register_instruments_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(InvalidPeriodError)
     async def _handle_invalid_period(_request: Request, exc: InvalidPeriodError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": exc.reason},
+        )
+
+    @app.exception_handler(InvalidSearchQueryError)
+    async def _handle_invalid_search_query(
+        _request: Request, exc: InvalidSearchQueryError
+    ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={"detail": exc.reason},

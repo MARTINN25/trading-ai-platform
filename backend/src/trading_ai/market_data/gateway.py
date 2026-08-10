@@ -25,6 +25,7 @@ import httpx
 
 from trading_ai.market_data.types import (
     InstrumentHistoryPeriod,
+    InstrumentSearchResult,
     InstrumentSnapshot,
     MarketDataError,
     MarketDataMalformedResponseError,
@@ -66,6 +67,28 @@ _PERIOD_PROVIDER_PARAMS: dict[InstrumentHistoryPeriod, tuple[str, int]] = {
     InstrumentHistoryPeriod.FIVE_DAY: ("1h", 40),
     InstrumentHistoryPeriod.ONE_MONTH: ("1day", 25),
 }
+
+# Final cap on what's returned to the caller (task scope §6: "максимум
+# 10 результатов"), applied *after* the US-common-stock filter below —
+# no longer the same number requested from the provider (see
+# `_SEARCH_PROVIDER_OUTPUT_SIZE`).
+_SEARCH_RESULT_LIMIT = 10
+
+# Requested `outputsize` — the documented max (confirmed live: 1
+# credit/request regardless of `outputsize`, no extra cost). MVP scope
+# is US-listed common stock only (Product Owner decision, R2): a
+# same-company match on a US exchange is frequently *not* among the
+# provider's first ~10 results for a name search — confirmed live for
+# "Microsoft" (NASDAQ:MSFT was the 22nd of 107 raw matches at
+# `outputsize=120`, past the point a 10-item request would ever have
+# reached) and even for an exact-ticker "MSFT" query (NASDAQ:MSFT was
+# the 2nd of several same-ticker cross-exchange matches). Requesting
+# the max and filtering the response is the only reliable way to
+# surface it, since `/symbol_search` has no request-time country/
+# exchange/instrument_type filter (confirmed against the official
+# docs — only `symbol`, `outputsize`, `show_plan` are documented
+# parameters).
+_SEARCH_PROVIDER_OUTPUT_SIZE = 120
 
 
 class TwelveDataGateway:
@@ -120,6 +143,19 @@ class TwelveDataGateway:
             raise
         self._log_history(ticker, period, started, status="ok", points_count=len(points))
         return PriceHistory(ticker=ticker, period=period, source=SOURCE, points=tuple(points))
+
+    async def search_instruments(self, query: str) -> list[InstrumentSearchResult]:
+        started = time.monotonic()
+        try:
+            response = await self._get(
+                "/symbol_search", {"symbol": query, "outputsize": _SEARCH_PROVIDER_OUTPUT_SIZE}
+            )
+            results = self._parse_search(query, response)
+        except MarketDataError as exc:
+            self._log_search(query, started, status=type(exc).__name__)
+            raise
+        self._log_search(query, started, status="ok", result_count=len(results))
+        return results
 
     async def _fetch_raw(self, ticker: str) -> httpx.Response:
         return await self._get("/quote", {"symbol": ticker})
@@ -316,6 +352,65 @@ class TwelveDataGateway:
         points.sort(key=lambda point: point.timestamp)
         return points
 
+    def _parse_search(self, query: str, response: httpx.Response) -> list[InstrumentSearchResult]:
+        # `_validate_payload` doesn't care that this is a /symbol_search
+        # response — status-code mapping and the `{"status": "error"}`
+        # body shape are identical across Twelve Data endpoints
+        # (confirmed against the docs, same as history/quote).
+        payload = self._validate_payload(query, response)
+
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise MarketDataMalformedResponseError("provider response missing data list")
+
+        results: list[InstrumentSearchResult] = []
+        for raw_item in data:
+            # MVP scope filter first, on the *raw* item (Product Owner
+            # decision, R2) — `country`/`instrument_type` aren't carried
+            # into `InstrumentSearchResult` (provider-neutral contract,
+            # no UI need), so this has to happen before mapping away.
+            if not _is_us_common_stock(raw_item):
+                continue
+            result = _parse_search_item(raw_item)
+            if result is not None:
+                results.append(result)
+
+        results = _dedupe_by_ticker(results)
+        results = _rank_exact_ticker_match_first(query, results)
+
+        # Defensive re-cap, independent of the requested `outputsize`
+        # (same "never fully trust the provider" rule as history/news).
+        return results[:_SEARCH_RESULT_LIMIT]
+
+    def _log_search(
+        self, query: str, started: float, *, status: str, result_count: int | None = None
+    ) -> None:
+        """Same rules as `_log`: no API key, no URL, no raw payload —
+        and never the full user query text either (task scope §15),
+        only its length.
+        """
+        latency_ms = (time.monotonic() - started) * 1000
+        query_length = len(query)
+        if result_count is None:
+            logger.info(
+                "market_data_search operation=search_instruments query_length=%d source=%s "
+                "status=%s latency_ms=%.1f",
+                query_length,
+                SOURCE,
+                status,
+                latency_ms,
+            )
+        else:
+            logger.info(
+                "market_data_search operation=search_instruments query_length=%d source=%s "
+                "status=%s latency_ms=%.1f result_count=%d",
+                query_length,
+                SOURCE,
+                status,
+                latency_ms,
+                result_count,
+            )
+
     def _log(self, ticker: str, started: float, *, operation: str, status: str) -> None:
         """Minimal observability per call (ADR-0009 §22, §48-style fields).
 
@@ -384,6 +479,97 @@ def _parse_history_timestamp(value: str) -> datetime:
         except ValueError:
             continue
     raise ValueError(f"unrecognized provider datetime format: {value!r}")
+
+
+def _parse_search_item(raw: Any) -> InstrumentSearchResult | None:
+    """Best-effort per-item parse.
+
+    Returns `None` (skip this one item) rather than failing the whole
+    search — one malformed match must never take down an otherwise-good
+    result list (same defensive-skip policy as
+    `news_gateway._parse_news_item`).
+    """
+    if not isinstance(raw, dict):
+        return None
+    ticker = raw.get("symbol")
+    name = raw.get("instrument_name")
+    if not isinstance(ticker, str) or not ticker.strip():
+        return None
+    if not isinstance(name, str) or not name.strip():
+        return None
+    return InstrumentSearchResult(
+        ticker=ticker.strip(),
+        name=name.strip(),
+        exchange=_optional_str(raw.get("exchange")),
+        instrument_type=_optional_str(raw.get("instrument_type")),
+        currency=_optional_str(raw.get("currency")),
+    )
+
+
+def _is_us_common_stock(raw: Any) -> bool:
+    """MVP instrument universe: US-listed common stock only (Product
+    Owner decision, R2 — see README "Instrument search" for the full
+    write-up).
+
+    An exact-string match on two fields Twelve Data's own docs define
+    precisely — `country` ("country to which stock exchange belongs
+    to") and `instrument_type` — not a guessed exchange/MIC-code
+    mapping. `/symbol_search` has no request-time filter for either
+    (confirmed against the official docs: only `symbol`, `outputsize`,
+    `show_plan` are documented parameters), so this filters the
+    response instead.
+    """
+    if not isinstance(raw, dict):
+        return False
+    return raw.get("country") == "United States" and raw.get("instrument_type") == "Common Stock"
+
+
+def _dedupe_by_ticker(results: list[InstrumentSearchResult]) -> list[InstrumentSearchResult]:
+    """Collapse same-ticker matches from different exchanges to one entry.
+
+    The watchlist's persisted identity is the ticker string alone — no
+    exchange column, `UNIQUE(ticker)` (`watchlist/models.py`). Kept as
+    a defensive safety net after `_is_us_common_stock` narrows the
+    result set: the filter is expected to leave at most one US common-
+    stock match per ticker, but this guarantees it regardless (keeps
+    the first, highest-ranked, per provider order).
+    """
+    seen: set[str] = set()
+    deduped: list[InstrumentSearchResult] = []
+    for result in results:
+        key = result.ticker.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(result)
+    return deduped
+
+
+def _rank_exact_ticker_match_first(
+    query: str, results: list[InstrumentSearchResult]
+) -> list[InstrumentSearchResult]:
+    """Move an exact ticker match to the front; stable otherwise.
+
+    Generic search relevance (matching the literal query string) on
+    top of the already-filtered US-common-stock result set — this
+    function itself still doesn't know about exchange/country/
+    instrument_type, that's `_is_us_common_stock`'s job. Confirmed live
+    (R2): even querying the exact ticker "MSFT" returns several
+    same-ticker cross-exchange matches from the provider (Argentina,
+    Mexico, Peru, Poland, Austria...) before `_is_us_common_stock`
+    narrows it down — this ranking is a secondary safety net, not the
+    primary mechanism.
+    """
+    normalized_query = query.strip().upper()
+    exact = [result for result in results if result.ticker.upper() == normalized_query]
+    rest = [result for result in results if result.ticker.upper() != normalized_query]
+    return exact + rest
+
+
+def _optional_str(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 def _optional_decimal(value: Any) -> Decimal | None:

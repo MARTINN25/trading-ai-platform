@@ -82,6 +82,20 @@ export interface InstrumentAiAnalysis {
   source: string;
 }
 
+export interface InstrumentSearchResult {
+  ticker: string;
+  name: string;
+  exchange: string | null;
+  instrument_type: string | null;
+  currency: string | null;
+}
+
+export interface InstrumentSearchResponse {
+  query: string;
+  /** Always capped at a fixed size — never provider-controlled pagination. */
+  items: InstrumentSearchResult[];
+}
+
 export type InstrumentApiErrorKind =
   | "invalid"
   | "not-found"
@@ -497,6 +511,112 @@ export async function generateInstrumentAnalysis(ticker: string): Promise<Instru
   }
 
   if (!isInstrumentAiAnalysis(data)) {
+    throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
+  }
+  return data;
+}
+
+function isInstrumentSearchResult(value: unknown): value is InstrumentSearchResult {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.ticker === "string" &&
+    typeof candidate.name === "string" &&
+    isNullableString(candidate.exchange) &&
+    isNullableString(candidate.instrument_type) &&
+    isNullableString(candidate.currency)
+  );
+}
+
+function isInstrumentSearchResponse(value: unknown): value is InstrumentSearchResponse {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.query === "string" &&
+    Array.isArray(candidate.items) &&
+    candidate.items.every(isInstrumentSearchResult)
+  );
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+/**
+ * The caller (`WatchlistPanel.tsx`) is responsible for debouncing and
+ * for passing an `AbortSignal` so a superseded in-flight search never
+ * overwrites a newer one with a stale response — this function itself
+ * fires exactly one request per call, no retry. A caller-triggered
+ * abort rejects with the DOM `AbortError` (rethrown as-is, not wrapped
+ * in `InstrumentApiError`) so the caller can distinguish "cancelled by
+ * a newer query" from a real failure and silently ignore it.
+ */
+export async function searchInstruments(
+  query: string,
+  signal?: AbortSignal
+): Promise<InstrumentSearchResponse> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/instruments/search?q=${encodeURIComponent(query)}`, {
+      method: "GET",
+      cache: "no-store",
+      signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+    throw new InstrumentApiError(
+      "network",
+      "Не удалось соединиться с сервером. Проверьте, что backend запущен, и повторите попытку."
+    );
+  }
+
+  if (response.status === 422) {
+    throw new InstrumentApiError(
+      "invalid",
+      "Слишком короткий запрос.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 504) {
+    throw new InstrumentApiError(
+      "timeout",
+      "Провайдер поиска не ответил вовремя. Попробуйте ещё раз.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 503) {
+    throw new InstrumentApiError(
+      "unavailable",
+      "Поиск сейчас недоступен.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (!response.ok) {
+    const backendDetail = await readBackendDetail(response);
+    throw new InstrumentApiError(
+      "unexpected",
+      "Не удалось выполнить поиск. Попробуйте ещё раз.",
+      backendDetail
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new InstrumentApiError("unexpected", "Backend вернул некорректный ответ.");
+  }
+
+  if (!isInstrumentSearchResponse(data)) {
     throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
   }
   return data;

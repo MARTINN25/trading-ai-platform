@@ -11,8 +11,10 @@ from trading_ai.market_data.types import (
     InstrumentHistoryPeriod,
     InstrumentNews,
     InstrumentNewsItem,
+    InstrumentSearchResult,
     InstrumentSnapshot,
     InvalidPeriodError,
+    InvalidSearchQueryError,
     MarketDataUnavailableError,
     PriceHistory,
     PricePoint,
@@ -21,6 +23,7 @@ from trading_ai.market_data.use_cases import (
     GetInstrumentDetails,
     GetInstrumentNews,
     GetInstrumentPriceHistory,
+    SearchInstruments,
 )
 from trading_ai.watchlist.domain import InvalidTickerError
 
@@ -34,12 +37,15 @@ class FakeInstrumentGateway:
         snapshot: InstrumentSnapshot | None = None,
         history: PriceHistory | None = None,
         news: InstrumentNews | None = None,
+        search_results: list[InstrumentSearchResult] | None = None,
     ) -> None:
         self._snapshot = snapshot
         self._history = history
         self._news = news
+        self._search_results = search_results
         self.received_ticker: str | None = None
         self.received_period: InstrumentHistoryPeriod | None = None
+        self.received_query: str | None = None
 
     async def get_instrument_snapshot(self, ticker: str) -> InstrumentSnapshot:
         self.received_ticker = ticker
@@ -58,6 +64,11 @@ class FakeInstrumentGateway:
         self.received_ticker = ticker
         assert self._news is not None
         return self._news
+
+    async def search_instruments(self, query: str) -> list[InstrumentSearchResult]:
+        self.received_query = query
+        assert self._search_results is not None
+        return self._search_results
 
 
 def _snapshot(ticker: str = "AAPL") -> InstrumentSnapshot:
@@ -250,3 +261,90 @@ async def test_get_instrument_news_provider_error_propagates() -> None:
 
     with pytest.raises(MarketDataUnavailableError):
         await use_case.execute("AAPL")
+
+
+def _search_result(ticker: str = "AAPL") -> InstrumentSearchResult:
+    return InstrumentSearchResult(
+        ticker=ticker,
+        name="Apple Inc.",
+        exchange="NASDAQ",
+        instrument_type="Common Stock",
+        currency="USD",
+    )
+
+
+@pytest.mark.anyio
+async def test_search_instruments_trims_query() -> None:
+    gateway = FakeInstrumentGateway(search_results=[_search_result()])
+    use_case = SearchInstruments(gateway)
+
+    await use_case.execute("  apple  ")
+
+    assert gateway.received_query == "apple"
+
+
+@pytest.mark.anyio
+async def test_search_instruments_successful_return() -> None:
+    gateway = FakeInstrumentGateway(search_results=[_search_result(), _search_result("AAP")])
+    use_case = SearchInstruments(gateway)
+
+    results = await use_case.execute("apple")
+
+    assert len(results) == 2
+    assert results[0].ticker == "AAPL"
+
+
+@pytest.mark.anyio
+async def test_search_instruments_empty_query_raises_before_gateway_call() -> None:
+    gateway = FakeInstrumentGateway()
+    use_case = SearchInstruments(gateway)
+
+    with pytest.raises(InvalidSearchQueryError):
+        await use_case.execute("")
+
+    assert gateway.received_query is None
+
+
+@pytest.mark.anyio
+async def test_search_instruments_single_char_query_raises_before_gateway_call() -> None:
+    gateway = FakeInstrumentGateway()
+    use_case = SearchInstruments(gateway)
+
+    with pytest.raises(InvalidSearchQueryError):
+        await use_case.execute("a")
+
+    assert gateway.received_query is None
+
+
+@pytest.mark.anyio
+async def test_search_instruments_whitespace_only_query_raises() -> None:
+    gateway = FakeInstrumentGateway()
+    use_case = SearchInstruments(gateway)
+
+    with pytest.raises(InvalidSearchQueryError):
+        await use_case.execute("   ")
+
+    assert gateway.received_query is None
+
+
+@pytest.mark.anyio
+async def test_search_instruments_two_char_query_is_accepted() -> None:
+    gateway = FakeInstrumentGateway(search_results=[_search_result("AA")])
+    use_case = SearchInstruments(gateway)
+
+    results = await use_case.execute("aa")
+
+    assert gateway.received_query == "aa"
+    assert len(results) == 1
+
+
+@pytest.mark.anyio
+async def test_search_instruments_provider_error_propagates() -> None:
+    class _FailingGateway:
+        async def search_instruments(self, query: str) -> list[InstrumentSearchResult]:
+            raise MarketDataUnavailableError("boom")
+
+    use_case = SearchInstruments(_FailingGateway())
+
+    with pytest.raises(MarketDataUnavailableError):
+        await use_case.execute("apple")

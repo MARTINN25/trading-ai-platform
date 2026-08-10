@@ -26,14 +26,17 @@ from trading_ai.api.routes.instruments import (
     get_instrument_details_use_case,
     get_instrument_news_use_case,
     get_instrument_price_history_use_case,
+    get_search_instruments_use_case,
 )
 from trading_ai.main import create_app
 from trading_ai.market_data.types import (
     InstrumentHistoryPeriod,
     InstrumentNews,
     InstrumentNewsItem,
+    InstrumentSearchResult,
     InstrumentSnapshot,
     InvalidPeriodError,
+    InvalidSearchQueryError,
     MarketDataRateLimitedError,
     MarketDataTimeoutError,
     MarketDataUnavailableError,
@@ -715,3 +718,179 @@ def test_generate_instrument_analysis_response_has_no_reasoning_field() -> None:
     assert "reasoning" not in body
     assert "chain_of_thought" not in body
     assert "thinking" not in body
+
+
+_FAKE_SEARCH_API_KEY = "test-secret-key-should-never-leak"
+
+
+class _FakeSearchInstruments:
+    def __init__(
+        self,
+        result: list[InstrumentSearchResult] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._result = result
+        self._error = error
+        self.received_query: str | None = None
+
+    async def execute(self, raw_query: str) -> list[InstrumentSearchResult]:
+        self.received_query = raw_query
+        if self._error is not None:
+            raise self._error
+        assert self._result is not None
+        return self._result
+
+
+def _override_search(app: FastAPI, fake_use_case: _FakeSearchInstruments) -> None:
+    app.dependency_overrides[get_search_instruments_use_case] = lambda: fake_use_case
+
+
+def _sample_search_results() -> list[InstrumentSearchResult]:
+    return [
+        InstrumentSearchResult(
+            ticker="AAPL",
+            name="Apple Inc.",
+            exchange="NASDAQ",
+            instrument_type="Common Stock",
+            currency="USD",
+        )
+    ]
+
+
+def test_search_instruments_success_returns_items() -> None:
+    app = create_app()
+    fake_use_case = _FakeSearchInstruments(result=_sample_search_results())
+    _override_search(app, fake_use_case)
+    client = TestClient(app)
+
+    response = client.get("/instruments/search?q=apple")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["query"] == "apple"
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["ticker"] == "AAPL"
+    assert item["name"] == "Apple Inc."
+    assert item["exchange"] == "NASDAQ"
+    assert item["currency"] == "USD"
+    assert fake_use_case.received_query == "apple"
+
+
+def test_search_instruments_empty_results_returns_200_with_empty_items() -> None:
+    app = create_app()
+    _override_search(app, _FakeSearchInstruments(result=[]))
+    client = TestClient(app)
+
+    response = client.get("/instruments/search?q=zzzznotreal")
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+
+
+def test_search_instruments_too_short_query_returns_422() -> None:
+    app = create_app()
+    _override_search(
+        app,
+        _FakeSearchInstruments(
+            error=InvalidSearchQueryError("query must be at least 2 characters")
+        ),
+    )
+    client = TestClient(app)
+
+    response = client.get("/instruments/search?q=a")
+
+    assert response.status_code == 422
+
+
+def test_search_instruments_missing_q_returns_422() -> None:
+    """FastAPI's own required-query-param validation, not our use case
+    (the dependency is never even reached)."""
+    app = create_app()
+    _override_search(app, _FakeSearchInstruments(result=[]))
+    client = TestClient(app)
+
+    response = client.get("/instruments/search")
+
+    assert response.status_code == 422
+
+
+def test_search_instruments_timeout_returns_504() -> None:
+    app = create_app()
+    _override_search(app, _FakeSearchInstruments(error=MarketDataTimeoutError("slow")))
+    client = TestClient(app)
+
+    response = client.get("/instruments/search?q=apple")
+
+    assert response.status_code == 504
+
+
+def test_search_instruments_rate_limited_returns_503() -> None:
+    app = create_app()
+    _override_search(app, _FakeSearchInstruments(error=MarketDataRateLimitedError("limit")))
+    client = TestClient(app)
+
+    response = client.get("/instruments/search?q=apple")
+
+    assert response.status_code == 503
+
+
+def test_search_instruments_unavailable_returns_503() -> None:
+    app = create_app()
+    _override_search(app, _FakeSearchInstruments(error=MarketDataUnavailableError("boom")))
+    client = TestClient(app)
+
+    response = client.get("/instruments/search?q=apple")
+
+    assert response.status_code == 503
+    assert "boom" not in response.text
+
+
+def test_search_instruments_without_provider_configured_returns_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TRADING_AI_MARKET_DATA_API_KEY", raising=False)
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/instruments/search?q=apple")
+
+    assert response.status_code == 503
+
+
+def test_search_instruments_does_not_collide_with_ticker_route() -> None:
+    """`/instruments/search` must never be matched as `/instruments/{ticker}`
+    with `ticker="search"` (task scope §6)."""
+    app = create_app()
+    _override_search(app, _FakeSearchInstruments(result=_sample_search_results()))
+    client = TestClient(app)
+
+    response = client.get("/instruments/search?q=apple")
+
+    assert response.status_code == 200
+    assert "query" in response.json()
+
+
+def test_search_instruments_response_never_contains_api_key_or_provider_url() -> None:
+    app = create_app()
+    _override_search(app, _FakeSearchInstruments(result=_sample_search_results()))
+    client = TestClient(app)
+
+    response = client.get("/instruments/search?q=apple")
+
+    assert _FAKE_SEARCH_API_KEY not in response.text
+    assert "api.twelvedata.com" not in response.text
+
+
+def test_search_instruments_response_has_no_extra_provider_fields() -> None:
+    """`mic_code`/`exchange_timezone`/`country` (present in the real
+    Twelve Data payload) never leak into the response (task scope §14)."""
+    app = create_app()
+    _override_search(app, _FakeSearchInstruments(result=_sample_search_results()))
+    client = TestClient(app)
+
+    response = client.get("/instruments/search?q=apple")
+
+    body = response.json()
+    assert "mic_code" not in body["items"][0]
+    assert "exchange_timezone" not in body["items"][0]
+    assert "country" not in body["items"][0]
