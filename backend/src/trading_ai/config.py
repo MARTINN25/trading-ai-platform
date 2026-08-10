@@ -49,6 +49,7 @@ class Settings:
     debug: bool
     database_url: str | None
     cors_origins: tuple[str, ...]
+    market_data_api_key: str | None
 
 
 def get_settings() -> Settings:
@@ -66,6 +67,11 @@ def get_settings() -> Settings:
         debug=_get_bool("TRADING_AI_DEBUG", False),
         database_url=os.environ.get("TRADING_AI_DATABASE_URL") or None,
         cors_origins=_get_cors_origins("TRADING_AI_CORS_ORIGINS", _DEFAULT_CORS_ORIGINS),
+        # No default — like TRADING_AI_DATABASE_URL, a secret never
+        # has a fallback value. Optional: market data (GET
+        # /watchlist/quotes) is disabled, not the whole application,
+        # when unset.
+        market_data_api_key=os.environ.get("TRADING_AI_MARKET_DATA_API_KEY") or None,
     )
 
 

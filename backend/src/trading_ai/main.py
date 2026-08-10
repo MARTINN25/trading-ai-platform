@@ -23,6 +23,7 @@ from trading_ai.config import get_settings
 from trading_ai.infrastructure.database.engine import create_database_engine
 from trading_ai.infrastructure.database.session import create_session_factory
 from trading_ai.logging import configure_logging
+from trading_ai.market_data.gateway import TwelveDataGateway
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.db_session_factory = None
 
     app.state.db_engine = engine
+
+    # Same optional-feature pattern as the database above: no key, no
+    # gateway, GET /watchlist/quotes reports 503 — nothing else is
+    # affected. No pooled resource to dispose (each call opens its own
+    # short-lived httpx client), unlike the database engine.
+    if settings.market_data_api_key is not None:
+        app.state.market_data_gateway = TwelveDataGateway(
+            api_key=settings.market_data_api_key
+        )
+    else:
+        logger.warning(
+            "TRADING_AI_MARKET_DATA_API_KEY is not set; market data is disabled."
+        )
+        app.state.market_data_gateway = None
+
     try:
         yield
     finally:

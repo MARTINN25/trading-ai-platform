@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 
+from trading_ai.market_data.types import MarketDataTimeoutError, MarketQuote
 from trading_ai.watchlist.domain import (
     DuplicateTickerError,
     InvalidTickerError,
@@ -13,6 +15,7 @@ from trading_ai.watchlist.domain import (
 from trading_ai.watchlist.use_cases import (
     AddWatchlistItem,
     ListWatchlistItems,
+    ListWatchlistItemsWithQuotes,
     RemoveWatchlistItem,
 )
 
@@ -117,3 +120,74 @@ async def test_remove_watchlist_item_raises_controlled_not_found_error() -> None
 
     with pytest.raises(WatchlistItemNotFoundError):
         await remove_use_case.execute(999)
+
+
+class FakeMarketDataGateway:
+    """In-memory test double — not a generic provider framework.
+
+    Configured per-ticker: either a canned `MarketQuote` or an
+    exception to raise, so tests can simulate "one ticker fails, the
+    rest succeed" without a real provider.
+    """
+
+    def __init__(
+        self,
+        quotes: dict[str, MarketQuote] | None = None,
+        errors: dict[str, Exception] | None = None,
+    ) -> None:
+        self._quotes = quotes or {}
+        self._errors = errors or {}
+
+    async def get_quote(self, ticker: str) -> MarketQuote:
+        if ticker in self._errors:
+            raise self._errors[ticker]
+        return self._quotes[ticker]
+
+
+def _fake_quote(ticker: str) -> MarketQuote:
+    return MarketQuote(
+        ticker=ticker,
+        price=Decimal("100.00"),
+        change=Decimal("1.00"),
+        change_percent=Decimal("1.00"),
+        as_of=datetime.now(timezone.utc),
+        source="fake",
+    )
+
+
+@pytest.mark.anyio
+async def test_list_watchlist_items_with_quotes_returns_quote_for_each_item() -> None:
+    repository = FakeWatchlistRepository()
+    add_use_case = AddWatchlistItem(repository)
+    await add_use_case.execute("AAPL")
+    await add_use_case.execute("MSFT")
+    gateway = FakeMarketDataGateway(
+        quotes={"AAPL": _fake_quote("AAPL"), "MSFT": _fake_quote("MSFT")}
+    )
+    use_case = ListWatchlistItemsWithQuotes(repository, gateway)
+
+    results = await use_case.execute()
+
+    assert [r.item.ticker for r in results] == ["AAPL", "MSFT"]
+    assert all(r.quote is not None and r.error is None for r in results)
+
+
+@pytest.mark.anyio
+async def test_list_watchlist_items_with_quotes_one_failure_does_not_fail_the_list() -> None:
+    repository = FakeWatchlistRepository()
+    add_use_case = AddWatchlistItem(repository)
+    await add_use_case.execute("AAPL")
+    await add_use_case.execute("MSFT")
+    gateway = FakeMarketDataGateway(
+        quotes={"MSFT": _fake_quote("MSFT")},
+        errors={"AAPL": MarketDataTimeoutError("timed out")},
+    )
+    use_case = ListWatchlistItemsWithQuotes(repository, gateway)
+
+    results = await use_case.execute()
+
+    by_ticker = {r.item.ticker: r for r in results}
+    assert by_ticker["AAPL"].quote is None
+    assert by_ticker["AAPL"].error == "timeout"
+    assert by_ticker["MSFT"].quote is not None
+    assert by_ticker["MSFT"].error is None

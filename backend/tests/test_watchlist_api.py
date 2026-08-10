@@ -8,6 +8,7 @@ ADR-0002 §27 criterion 12.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,13 +17,16 @@ from trading_ai.api.routes.watchlist import (
     get_add_watchlist_item_use_case,
     get_list_watchlist_items_use_case,
     get_remove_watchlist_item_use_case,
+    get_watchlist_quotes_use_case,
 )
 from trading_ai.main import create_app
+from trading_ai.market_data.types import MarketQuote
 from trading_ai.watchlist.domain import (
     DuplicateTickerError,
     WatchlistItem,
     WatchlistItemNotFoundError,
 )
+from trading_ai.watchlist.use_cases import WatchlistItemQuoteResult
 
 
 class _FakeAddWatchlistItem:
@@ -56,6 +60,14 @@ class _FakeRemoveWatchlistItem:
         self.received_item_id = item_id
         if self._error is not None:
             raise self._error
+
+
+class _FakeListWatchlistItemsWithQuotes:
+    def __init__(self, results: list[WatchlistItemQuoteResult]) -> None:
+        self._results = results
+
+    async def execute(self) -> list[WatchlistItemQuoteResult]:
+        return self._results
 
 
 def test_post_watchlist_success_returns_201_via_fake_use_case() -> None:
@@ -118,6 +130,72 @@ def test_get_watchlist_returns_empty_list_when_no_items() -> None:
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_get_watchlist_quotes_returns_price_fields_on_success() -> None:
+    app = create_app()
+    item = WatchlistItem(id=1, ticker="AAPL", created_at=datetime.now(timezone.utc))
+    quote = MarketQuote(
+        ticker="AAPL",
+        price=Decimal("213.45"),
+        change=Decimal("2.31"),
+        change_percent=Decimal("1.09"),
+        as_of=datetime.now(timezone.utc),
+        source="twelvedata",
+    )
+    fake_use_case = _FakeListWatchlistItemsWithQuotes(
+        [WatchlistItemQuoteResult(item=item, quote=quote, error=None)]
+    )
+    app.dependency_overrides[get_watchlist_quotes_use_case] = lambda: fake_use_case
+    client = TestClient(app)
+
+    response = client.get("/watchlist/quotes")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    entry = body[0]
+    assert entry["id"] == 1
+    assert entry["ticker"] == "AAPL"
+    assert "created_at" in entry
+    # Decimal is serialized as a JSON string, not a float — exact
+    # financial precision, no float rounding (this is why the domain
+    # type is Decimal, not float).
+    assert Decimal(entry["price"]) == Decimal("213.45")
+    assert Decimal(entry["change"]) == Decimal("2.31")
+    assert Decimal(entry["change_percent"]) == Decimal("1.09")
+    assert "as_of" in entry and entry["as_of"] is not None
+    assert entry["source"] == "twelvedata"
+    assert entry["quote_error"] is None
+
+
+def test_get_watchlist_quotes_item_level_failure_is_safe_and_does_not_500() -> None:
+    app = create_app()
+    item = WatchlistItem(id=1, ticker="AAPL", created_at=datetime.now(timezone.utc))
+    fake_use_case = _FakeListWatchlistItemsWithQuotes(
+        [WatchlistItemQuoteResult(item=item, quote=None, error="timeout")]
+    )
+    app.dependency_overrides[get_watchlist_quotes_use_case] = lambda: fake_use_case
+    client = TestClient(app)
+
+    response = client.get("/watchlist/quotes")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body[0]["quote_error"] == "timeout"
+    assert body[0]["price"] is None
+    assert "traceback" not in response.text.lower()
+
+
+def test_get_watchlist_quotes_without_provider_configured_returns_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TRADING_AI_MARKET_DATA_API_KEY", raising=False)
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/watchlist/quotes")
+
+    assert response.status_code == 503
 
 
 def test_delete_watchlist_item_returns_204_with_no_body() -> None:

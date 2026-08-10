@@ -135,12 +135,18 @@ h2 {
 
 .watchlist-list li {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  flex-direction: column;
+  gap: 0.3rem;
   padding: 0.5rem 0.75rem;
   border: 1px solid #ccc;
   border-radius: 0.25rem;
+}
+
+.watchlist-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .watchlist-created-at {
@@ -188,6 +194,105 @@ h2 {
 
 @media (prefers-color-scheme: dark) {
   .watchlist-created-at {
+    color: #aaa;
+  }
+}
+
+.watchlist-heading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.watchlist-heading-row h2 {
+  margin-bottom: 0;
+}
+
+.watchlist-refresh-button {
+  padding: 0.3rem 0.65rem;
+  font-size: 0.85rem;
+  border: 1px solid #444;
+  border-radius: 0.25rem;
+  background: transparent;
+  cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+  .watchlist-refresh-button {
+    border-color: #ccc;
+    color: #f5f5f5;
+  }
+}
+
+.watchlist-quote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.watchlist-quote-price {
+  font-weight: 600;
+}
+
+/* Positive/negative are never color-only: the rendered text always
+   carries an explicit +/-/± sign too (see formatChange in
+   WatchlistPanel.tsx), and each span has an aria-label describing the
+   direction in words. */
+.watchlist-quote-change-up {
+  color: #1a7f37;
+}
+
+.watchlist-quote-change-down {
+  color: #b00020;
+}
+
+.watchlist-quote-change-flat {
+  color: #666;
+}
+
+@media (prefers-color-scheme: dark) {
+  .watchlist-quote-change-up {
+    color: #4ade80;
+  }
+
+  .watchlist-quote-change-down {
+    color: #ff6b6b;
+  }
+
+  .watchlist-quote-change-flat {
+    color: #aaa;
+  }
+}
+
+.watchlist-quote-as-of {
+  color: #666;
+  font-size: 0.8rem;
+}
+
+.watchlist-quote-unavailable {
+  color: #666;
+  font-style: italic;
+  font-size: 0.85rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .watchlist-quote-as-of,
+  .watchlist-quote-unavailable {
+    color: #aaa;
+  }
+}
+
+.watchlist-disclaimer {
+  margin-top: 1.5rem;
+  color: #666;
+  font-size: 0.8rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .watchlist-disclaimer {
     color: #aaa;
   }
 }

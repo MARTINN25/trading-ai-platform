@@ -181,6 +181,58 @@ def test_delete_removes_a_real_row_and_second_delete_returns_404(
 
 
 @pytest.mark.skipif(not _TEST_DATABASE_URL, reason=_SKIP_REASON)
+def test_watchlist_quotes_uses_real_rows_with_a_fake_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`GET /watchlist/quotes` reads real PostgreSQL rows (task scope:
+    "market quote endpoint использует реальные watchlist rows") without
+    calling the real external provider — that would make this a
+    live-provider test, which must stay opt-in behind its own marker
+    (see `test_live_market_data_quote_smoke` below), not part of the
+    regular `integration` suite.
+    """
+    test_database_url = _TEST_DATABASE_URL
+    assert test_database_url is not None
+    monkeypatch.setenv("TRADING_AI_DATABASE_URL", test_database_url)
+
+    from trading_ai.api.routes.watchlist import get_market_data_gateway
+    from trading_ai.main import create_app
+    from trading_ai.market_data.types import MarketQuote
+
+    class _FakeGateway:
+        async def get_quote(self, ticker: str) -> MarketQuote:
+            from datetime import datetime, timezone
+            from decimal import Decimal
+
+            return MarketQuote(
+                ticker=ticker,
+                price=Decimal("100.00"),
+                change=Decimal("1.00"),
+                change_percent=Decimal("1.00"),
+                as_of=datetime.now(timezone.utc),
+                source="fake",
+            )
+
+    ticker = _unique_ticker()
+    try:
+        app = create_app()
+        app.dependency_overrides[get_market_data_gateway] = lambda: _FakeGateway()
+        with TestClient(app) as client:
+            created = client.post("/watchlist", json={"ticker": ticker})
+            assert created.status_code == 201
+
+            response = client.get("/watchlist/quotes")
+
+        assert response.status_code == 200
+        entries = [entry for entry in response.json() if entry["ticker"] == ticker]
+        assert len(entries) == 1
+        assert entries[0]["source"] == "fake"
+        assert entries[0]["quote_error"] is None
+    finally:
+        _delete_ticker(ticker)
+
+
+@pytest.mark.skipif(not _TEST_DATABASE_URL, reason=_SKIP_REASON)
 def test_list_all_breaks_created_at_ties_by_id() -> None:
     """`created_at` alone can repeat (server `now()` has finite resolution
     and can coincide within one transaction) — `list_all()` must still
