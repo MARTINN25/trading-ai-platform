@@ -167,3 +167,47 @@ def test_live_instrument_analysis_smoke() -> None:
     # No chain-of-thought/internal-reasoning field exists on this type
     # at all (task scope §14) — nothing to strip, nothing to assert
     # away here beyond the structural guarantee of the dataclass itself.
+
+
+@pytest.mark.live_provider
+@pytest.mark.skipif(
+    not _LIVE_API_KEY,
+    reason=(
+        "TRADING_AI_LIVE_MARKET_DATA_API_KEY is not set - skipping live "
+        "market-data provider smoke test (opt-in only)."
+    ),
+)
+def test_live_search_instruments_smoke() -> None:
+    """Two real calls — Apple and Microsoft (R2 task scope: "Verify
+    Apple and Microsoft with real provider calls"), still bounded
+    ("не делать много live calls").
+
+    Also verifies the R2 US-common-stock filter against real provider
+    data: Twelve Data's raw `/symbol_search` response for "Apple"
+    includes non-US listings sharing the AAPL ticker (Colombia, Mexico)
+    and a non-equity South African ETN, all excluded — confirmed live
+    before this test was written. At `outputsize=120` a few unrelated
+    but genuinely US-common-stock companies also match the "Apple"
+    substring (e.g. "Apple iSport Group Inc.", ticker AAPI) — expected
+    and correct: the filter's job is US-common-stock-only, not
+    single-result exact identification, so this asserts AAPL is
+    present and ranked first (provider relevance), not `len() == 1`.
+    """
+    assert _LIVE_API_KEY is not None
+    gateway = TwelveDataGateway(api_key=_LIVE_API_KEY)
+
+    apple_results = asyncio.run(gateway.search_instruments("Apple"))
+    assert len(apple_results) >= 1
+    assert apple_results[0].ticker == "AAPL"
+    assert apple_results[0].exchange == "NASDAQ"
+    assert apple_results[0].currency == "USD"
+
+    microsoft_results = asyncio.run(gateway.search_instruments("Microsoft"))
+    assert len(microsoft_results) >= 1
+    assert microsoft_results[0].ticker == "MSFT"
+    assert microsoft_results[0].exchange == "NASDAQ"
+    assert microsoft_results[0].currency == "USD"
+
+    for result in (*apple_results, *microsoft_results):
+        assert result.ticker != ""
+        assert result.name != ""

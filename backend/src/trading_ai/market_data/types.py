@@ -195,3 +195,56 @@ class InstrumentNews:
     ticker: str
     source: str
     items: tuple[InstrumentNewsItem, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentSearchResult:
+    """One symbol-search match — only the fields the UI actually needs.
+
+    `ticker`/`name` are required: an item missing either isn't usable
+    at all and is dropped by the gateway before construction (same
+    defensive-skip policy as `InstrumentNewsItem`). `exchange`/
+    `instrument_type`/`currency` are `None`, never invented, when the
+    provider's response didn't include them.
+    """
+
+    ticker: str
+    name: str
+    exchange: str | None
+    instrument_type: str | None
+    currency: str | None
+
+
+class InvalidSearchQueryError(Exception):
+    """Raised when a search query fails validation (too short/empty).
+
+    A request-validation error, not a provider-call failure — mirrors
+    `InvalidPeriodError`/`InvalidTickerError` (mapped to `422`), not
+    `MarketDataError` (mapped to `404`/`503`/`504` — those only happen
+    after a provider call is actually made).
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+# Below this, a query is too unspecific to be a useful search and
+# would just waste a provider request (task scope §7, §9: "минимум 2
+# символа перед search").
+MIN_SEARCH_QUERY_LENGTH = 2
+
+
+def normalize_search_query(raw: str) -> str:
+    """Trim and validate a raw search query string.
+
+    Raises `InvalidSearchQueryError` if the trimmed query is shorter
+    than `MIN_SEARCH_QUERY_LENGTH` — never silently searches with an
+    unspecific/empty query.
+    """
+    query = raw.strip()
+    if len(query) < MIN_SEARCH_QUERY_LENGTH:
+        raise InvalidSearchQueryError(
+            f"query must be at least {MIN_SEARCH_QUERY_LENGTH} characters"
+        )
+    return query

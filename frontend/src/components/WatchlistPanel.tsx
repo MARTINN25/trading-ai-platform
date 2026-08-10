@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import Link from "next/link";
 import {
   addWatchlistItem,
@@ -9,6 +9,7 @@ import {
   WatchlistApiError,
   type WatchlistItemQuote,
 } from "@/lib/watchlist-api";
+import { searchInstruments, InstrumentApiError, type InstrumentSearchResult } from "@/lib/instrument-api";
 
 type ListState =
   | { status: "loading" }
@@ -16,6 +17,18 @@ type ListState =
   | { status: "error"; message: string };
 
 type FormErrorKind = "duplicate" | "invalid" | "unexpected" | null;
+
+type SearchState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "loaded"; items: InstrumentSearchResult[] }
+  | { status: "error"; message: string };
+
+// Task scope §7, §9: fewer than this many characters is too
+// unspecific to be worth a provider request — no search fires below
+// it, matching the backend's own `MIN_SEARCH_QUERY_LENGTH`.
+const MIN_SEARCH_QUERY_LENGTH = 2;
+const SEARCH_DEBOUNCE_MS = 300;
 
 const createdAtFormatter = new Intl.DateTimeFormat("ru-RU", {
   dateStyle: "medium",
@@ -87,6 +100,14 @@ export default function WatchlistPanel() {
   const [removingId, setRemovingId] = useState<number | null>(null);
   const [deleteErrorMessage, setDeleteErrorMessage] = useState<string | null>(null);
 
+  // Search-as-you-type state — separate from the exact-ticker form
+  // state above, since the input now serves both roles (task scope
+  // §3: adapt the existing field, don't replace it).
+  const [searchState, setSearchState] = useState<SearchState>({ status: "idle" });
+  const [resultsVisible, setResultsVisible] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   // Single "load" function drives initial load, the manual "Обновить
   // данные" button, error retry, and the reload after a successful
   // add/delete (task scope: manual/one-shot loading, no auto-refresh
@@ -108,22 +129,60 @@ export default function WatchlistPanel() {
     loadWatchlist();
   }, [loadWatchlist]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
+  // Debounced search-as-you-type (task scope §7, §9): no request below
+  // MIN_SEARCH_QUERY_LENGTH, no request per keypress, at most one
+  // settled-query request via the timer below. The effect's own
+  // cleanup — which React runs before every re-run and on unmount —
+  // both cancels a not-yet-fired timer and aborts an already-in-flight
+  // fetch, so a stale response from a superseded query can never
+  // overwrite a newer one (the aborted fetch's promise rejects with
+  // `AbortError`, which the `.catch` below silently ignores).
+  useEffect(() => {
     const trimmed = ticker.trim();
-    if (!trimmed) {
-      setFormErrorKind("invalid");
-      setFormErrorMessage("Введите тикер.");
+
+    if (trimmed.length < MIN_SEARCH_QUERY_LENGTH) {
+      setSearchState({ status: "idle" });
+      setResultsVisible(false);
       return;
     }
 
+    const timer = setTimeout(() => {
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      setSearchState({ status: "loading" });
+      setResultsVisible(true);
+      searchInstruments(trimmed, controller.signal)
+        .then((response) => {
+          setSearchState({ status: "loaded", items: response.items });
+          setHighlightedIndex(-1);
+        })
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            return;
+          }
+          const message =
+            error instanceof InstrumentApiError ? error.message : "Не удалось выполнить поиск.";
+          setSearchState({ status: "error", message });
+        });
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timer);
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+    };
+  }, [ticker]);
+
+  async function addTicker(rawTicker: string): Promise<void> {
     setSubmitting(true);
     setFormErrorKind(null);
     setFormErrorMessage(null);
 
     try {
-      await addWatchlistItem(trimmed);
+      await addWatchlistItem(rawTicker);
       setTicker("");
+      setSearchState({ status: "idle" });
+      setResultsVisible(false);
       // Reload (not a local splice): the new item needs its quote
       // fetched too, and this endpoint returns items+quotes together.
       loadWatchlist();
@@ -139,6 +198,44 @@ export default function WatchlistPanel() {
       }
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const trimmed = ticker.trim();
+    if (!trimmed) {
+      setFormErrorKind("invalid");
+      setFormErrorMessage("Введите тикер.");
+      return;
+    }
+    await addTicker(trimmed);
+  }
+
+  async function handleSelectResult(result: InstrumentSearchResult): Promise<void> {
+    setResultsVisible(false);
+    await addTicker(result.ticker);
+  }
+
+  function handleInputKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    if (searchState.status !== "loaded" || !resultsVisible || searchState.items.length === 0) {
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setHighlightedIndex((prev) => Math.min(prev + 1, searchState.items.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightedIndex((prev) => Math.max(prev - 1, 0));
+    } else if (event.key === "Enter" && highlightedIndex >= 0) {
+      // Only intercept Enter when a result is actually highlighted —
+      // otherwise it falls through to the form's onSubmit, preserving
+      // exact-ticker entry as a fallback (task scope §3, §7).
+      event.preventDefault();
+      void handleSelectResult(searchState.items[highlightedIndex]);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setResultsVisible(false);
     }
   }
 
@@ -171,22 +268,92 @@ export default function WatchlistPanel() {
         ) : null}
       </div>
 
-      <form className="watchlist-form" onSubmit={handleSubmit} noValidate>
-        <label htmlFor="ticker-input">Тикер</label>
+      <form className="watchlist-form" onSubmit={handleSubmit} noValidate autoComplete="off">
+        <label htmlFor="ticker-input">Тикер или название</label>
         <div className="watchlist-form-row">
           <input
             id="ticker-input"
             name="ticker"
             type="text"
             value={ticker}
-            onChange={(event) => setTicker(event.target.value.toUpperCase())}
-            placeholder="Например, AAPL"
+            onChange={(event) => setTicker(event.target.value)}
+            onKeyDown={handleInputKeyDown}
+            onFocus={() => {
+              if (searchState.status === "loaded" && searchState.items.length > 0) {
+                setResultsVisible(true);
+              }
+            }}
+            onBlur={() => setResultsVisible(false)}
+            placeholder="Например, Apple или AAPL"
             disabled={submitting}
             autoComplete="off"
+            role="combobox"
+            aria-expanded={resultsVisible}
+            aria-autocomplete="list"
+            aria-controls="watchlist-search-results"
           />
           <button type="submit" disabled={submitting}>
             {submitting ? "Добавление…" : "Добавить"}
           </button>
+
+          {resultsVisible ? (
+            <div
+              className="watchlist-search-results"
+              id="watchlist-search-results"
+              role="listbox"
+            >
+              {searchState.status === "loading" && (
+                <p className="watchlist-search-loading">Поиск…</p>
+              )}
+
+              {searchState.status === "error" && (
+                <p className="watchlist-search-error" role="alert">
+                  {searchState.message}
+                </p>
+              )}
+
+              {searchState.status === "loaded" && searchState.items.length === 0 && (
+                <p className="watchlist-search-empty">Ничего не найдено.</p>
+              )}
+
+              {searchState.status === "loaded" && searchState.items.length > 0 && (
+                <>
+                  <ul>
+                    {searchState.items.map((result, index) => {
+                      const meta = [result.exchange, result.currency]
+                        .filter((part): part is string => Boolean(part))
+                        .join(" · ");
+                      return (
+                        <li
+                          key={`${result.ticker}-${result.exchange ?? ""}-${index}`}
+                          role="option"
+                          aria-selected={index === highlightedIndex}
+                          className={
+                            index === highlightedIndex
+                              ? "watchlist-search-result watchlist-search-result-highlighted"
+                              : "watchlist-search-result"
+                          }
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => void handleSelectResult(result)}
+                          onMouseEnter={() => setHighlightedIndex(index)}
+                        >
+                          <span className="watchlist-search-result-ticker">{result.ticker}</span>
+                          <span className="watchlist-search-result-name">{result.name}</span>
+                          {meta ? (
+                            <span className="watchlist-search-result-meta">{meta}</span>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <p className="watchlist-search-hint">
+                    В watchlist сохраняется только тикер, без привязки к бирже. Биржа и валюта
+                    показаны, чтобы отличить нужный инструмент от похожих тикеров.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : null}
         </div>
         {formErrorMessage ? (
           <p
