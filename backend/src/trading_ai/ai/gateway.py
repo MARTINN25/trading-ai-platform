@@ -95,14 +95,21 @@ _FORBIDDEN_PATTERNS = [
 ]
 
 
-def _contains_forbidden_language(text: str) -> bool:
+def contains_forbidden_language(text: str) -> bool:
+    """Public (not `_`-prefixed): also reused by `ai/evaluation/evaluators.py`
+    so production and evaluation share one phrase list instead of two
+    that could silently drift apart."""
     return any(pattern.search(text) for pattern in _FORBIDDEN_PATTERNS)
 
 
-class _ModelOutputSchema(BaseModel):
+class ModelOutputSchema(BaseModel):
     """Local source of truth (ADR-0007 §28-29) — validated independently
     of whatever the provider's own "strict" structured-output mode claims
-    to guarantee."""
+    to guarantee.
+
+    Public (not `_`-prefixed): also reused by `ai/evaluation/evaluators.py`
+    to validate raw model-shaped JSON offline, without duplicating this
+    schema."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -214,14 +221,14 @@ class XAIGateway:
             raise AIInvalidOutputError("model output was not valid JSON") from exc
 
         try:
-            validated = _ModelOutputSchema.model_validate(structured)
+            validated = ModelOutputSchema.model_validate(structured)
         except ValidationError as exc:
             raise AIInvalidOutputError("model output failed schema validation") from exc
 
         combined_text = " ".join(
             [validated.summary, validated.price_context, validated.news_context, *validated.risks]
         )
-        if _contains_forbidden_language(combined_text):
+        if contains_forbidden_language(combined_text):
             raise AIInvalidOutputError("model output contained forbidden recommendation language")
 
         analysis = InstrumentAnalysis(
