@@ -51,6 +51,8 @@ class Settings:
     cors_origins: tuple[str, ...]
     market_data_api_key: str | None
     news_api_key: str | None
+    llm_api_key: str | None
+    llm_model: str
 
 
 def get_settings() -> Settings:
@@ -78,6 +80,15 @@ def get_settings() -> Settings:
         # cover this). Same optional-feature pattern: unset disables
         # only GET /instruments/{ticker}/news, nothing else.
         news_api_key=os.environ.get("TRADING_AI_NEWS_API_KEY") or None,
+        # Third, separate secret/provider — xAI (ADR-0007 §64). Same
+        # optional-feature pattern: unset disables only
+        # POST /instruments/{ticker}/analysis, nothing else.
+        llm_api_key=os.environ.get("TRADING_AI_LLM_API_KEY") or None,
+        # Not a secret — the model name is configurable (ADR-0007 §23:
+        # "конкретная модель выбирается конфигурацией из allowlist"),
+        # defaulting to the current documented flagship text/chat model
+        # (`ai/gateway.py` module docstring has the full reasoning).
+        llm_model=os.environ.get("TRADING_AI_LLM_MODEL", "grok-4.5"),
     )
 
 

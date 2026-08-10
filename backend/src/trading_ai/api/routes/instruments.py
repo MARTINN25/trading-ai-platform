@@ -17,6 +17,14 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from trading_ai.ai.gateway import XAIGateway
+from trading_ai.ai.types import (
+    AIAnalysisError,
+    AIInsufficientDataError,
+    AIRateLimitedError,
+    AITimeoutError,
+)
+from trading_ai.ai.use_cases import GenerateInstrumentAnalysis
 from trading_ai.market_data.gateway import TwelveDataGateway
 from trading_ai.market_data.news_gateway import FinnhubNewsGateway
 from trading_ai.market_data.types import (
@@ -101,6 +109,22 @@ class InstrumentNewsResponse(BaseModel):
     items: list[InstrumentNewsItemResponse]
 
 
+class InstrumentAnalysisResponse(BaseModel):
+    """Provider-neutral structured AI result (task scope §4). Never
+    BUY/SELL/HOLD/target-price content — enforced by the gateway's
+    fixed prompt plus local validation (`ai/gateway.py`), not just
+    documented here. `disclaimer` is always the same fixed text."""
+
+    ticker: str
+    generated_at: datetime
+    summary: str
+    price_context: str
+    news_context: str
+    risks: list[str]
+    disclaimer: str
+    source: str
+
+
 def get_market_data_gateway(request: Request) -> TwelveDataGateway:
     """Return the gateway created by the lifespan, or fail controlled.
 
@@ -145,6 +169,48 @@ def get_instrument_news_use_case(
     gateway: Annotated[FinnhubNewsGateway, Depends(get_news_gateway)],
 ) -> GetInstrumentNews:
     return GetInstrumentNews(gateway)
+
+
+def get_optional_news_gateway(request: Request) -> FinnhubNewsGateway | None:
+    """Unlike `get_news_gateway`, never raises.
+
+    The AI-analysis endpoint degrades gracefully when news isn't
+    configured at all (task scope §9) — same treatment as a
+    configured-but-failing news call, not a hard failure of the whole
+    analysis over one optional data source.
+    """
+    gateway = getattr(request.app.state, "news_gateway", None)
+    return gateway
+
+
+def get_ai_gateway(request: Request) -> XAIGateway:
+    """Same optional-feature pattern as `get_market_data_gateway`, a
+    third separate provider/secret (`TRADING_AI_LLM_API_KEY` -> xAI)."""
+    gateway = getattr(request.app.state, "ai_gateway", None)
+    if gateway is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI analysis is not configured",
+        )
+    return gateway  # type: ignore[no-any-return]
+
+
+def get_generate_instrument_analysis_use_case(
+    ai_gateway: Annotated[XAIGateway, Depends(get_ai_gateway)],
+    market_gateway: Annotated[TwelveDataGateway, Depends(get_market_data_gateway)],
+    optional_news_gateway: Annotated[
+        FinnhubNewsGateway | None, Depends(get_optional_news_gateway)
+    ],
+) -> GenerateInstrumentAnalysis:
+    news_use_case = (
+        GetInstrumentNews(optional_news_gateway) if optional_news_gateway is not None else None
+    )
+    return GenerateInstrumentAnalysis(
+        details_use_case=GetInstrumentDetails(market_gateway),
+        history_use_case=GetInstrumentPriceHistory(market_gateway),
+        news_use_case=news_use_case,
+        ai_gateway=ai_gateway,
+    )
 
 
 @router.get("/instruments/{ticker}", response_model=InstrumentDetailsResponse)
@@ -209,6 +275,73 @@ async def get_instrument_news(
             for item in news.items
         ],
     )
+
+
+@router.post("/instruments/{ticker}/analysis", response_model=InstrumentAnalysisResponse)
+async def generate_instrument_analysis(
+    ticker: str,
+    use_case: Annotated[
+        GenerateInstrumentAnalysis, Depends(get_generate_instrument_analysis_use_case)
+    ],
+) -> InstrumentAnalysisResponse:
+    """No request body is accepted — the ticker comes from the path only
+    (task scope §6: the endpoint never accepts a free-form prompt).
+    POST, not GET, since this triggers a paid/computational LLM
+    generation call rather than a cached-feeling read (task scope §10)."""
+    analysis = await use_case.execute(ticker)
+    return InstrumentAnalysisResponse(
+        ticker=analysis.ticker,
+        generated_at=analysis.generated_at,
+        summary=analysis.summary,
+        price_context=analysis.price_context,
+        news_context=analysis.news_context,
+        risks=list(analysis.risks),
+        disclaimer=analysis.disclaimer,
+        source=analysis.provider,
+    )
+
+
+def register_ai_analysis_exception_handlers(app: FastAPI) -> None:
+    """Map AI-analysis errors to safe, controlled HTTP responses.
+
+    `InvalidTickerError` (raised by `normalize_ticker` inside the use
+    case) is already handled globally by
+    `register_watchlist_exception_handlers` (422). Same MRO-based
+    dispatch pattern as `register_instruments_exception_handlers`: the
+    `AIAnalysisError` base-class handler is the fallback for
+    `AIProviderUnavailableError`/`AIInvalidOutputError`, which don't
+    need a more specific status code than 503.
+    """
+
+    @app.exception_handler(AIInsufficientDataError)
+    async def _handle_insufficient_data(
+        _request: Request, _exc: AIInsufficientDataError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": "insufficient data to generate an analysis"},
+        )
+
+    @app.exception_handler(AIRateLimitedError)
+    async def _handle_ai_rate_limited(_request: Request, _exc: AIRateLimitedError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": "AI provider is rate limited"},
+        )
+
+    @app.exception_handler(AITimeoutError)
+    async def _handle_ai_timeout(_request: Request, _exc: AITimeoutError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            content={"detail": "AI provider timed out"},
+        )
+
+    @app.exception_handler(AIAnalysisError)
+    async def _handle_ai_analysis_error(_request: Request, _exc: AIAnalysisError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": "AI analysis is unavailable"},
+        )
 
 
 def register_instruments_exception_handlers(app: FastAPI) -> None:

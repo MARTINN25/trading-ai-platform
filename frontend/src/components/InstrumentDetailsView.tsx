@@ -9,6 +9,7 @@ import {
 } from "@/lib/instrument-api";
 import PriceChartSection from "@/components/PriceChartSection";
 import InstrumentNewsSection from "@/components/InstrumentNewsSection";
+import AiAnalysisSection from "@/components/AiAnalysisSection";
 
 type ViewState =
   | { status: "loading" }
@@ -137,6 +138,12 @@ export default function InstrumentDetailsView({ ticker }: { ticker: string }) {
           page-level state, no section's failure hides another's
           already-loaded data (task scope §9). */}
       <InstrumentNewsSection ticker={ticker} />
+
+      {/* Same independence rule again: AI-analysis generation is
+          entirely user-click-driven (never auto-triggered) and its own
+          state never hides an already-loaded summary/chart/news, nor
+          vice versa (task scope §9, §11). */}
+      <AiAnalysisSection ticker={ticker} />
 
       <p className="instrument-disclaimer">
         Рыночные данные — только для просмотра и могут запаздывать; это не торговое исполнение и
