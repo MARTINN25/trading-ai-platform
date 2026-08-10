@@ -36,6 +36,14 @@ _SUCCESS_PAYLOAD = {
     "is_market_open": False,
 }
 
+_SNAPSHOT_PAYLOAD = {
+    **_SUCCESS_PAYLOAD,
+    "open": "210.00000",
+    "high": "214.20000",
+    "low": "209.50000",
+    "volume": "48213456",
+}
+
 
 def _gateway(handler: object) -> TwelveDataGateway:
     transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
@@ -172,3 +180,116 @@ async def test_no_secret_leakage_in_error_messages() -> None:
 
     assert _FAKE_API_KEY not in str(exc_info.value)
     assert _FAKE_API_KEY not in repr(exc_info.value)
+
+
+@pytest.mark.anyio
+async def test_get_instrument_snapshot_maps_successful_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["symbol"] == "AAPL"
+        return httpx.Response(200, json=_SNAPSHOT_PAYLOAD)
+
+    snapshot = await _gateway(handler).get_instrument_snapshot("AAPL")
+
+    assert snapshot.ticker == "AAPL"
+    assert snapshot.price == Decimal("213.45000")
+    assert snapshot.change == Decimal("2.31000")
+    assert snapshot.change_percent == Decimal("1.09400")
+    assert snapshot.open == Decimal("210.00000")
+    assert snapshot.high == Decimal("214.20000")
+    assert snapshot.low == Decimal("209.50000")
+    assert snapshot.previous_close == Decimal("211.14000")
+    assert snapshot.volume == 48_213_456
+    assert snapshot.source == SOURCE
+    assert snapshot.as_of.tzinfo is not None
+
+
+@pytest.mark.anyio
+async def test_get_instrument_snapshot_missing_optional_field_is_none_not_zero() -> None:
+    """A field the provider didn't return (e.g. no volume for this
+    instrument type) must surface as `None`, never a guessed `0` —
+    task scope: never invent a value the provider didn't give."""
+
+    payload = {k: v for k, v in _SNAPSHOT_PAYLOAD.items() if k != "volume"}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    snapshot = await _gateway(handler).get_instrument_snapshot("AAPL")
+
+    assert snapshot.volume is None
+    assert snapshot.open == Decimal("210.00000")
+
+
+@pytest.mark.anyio
+async def test_get_instrument_snapshot_unparseable_optional_field_is_none() -> None:
+    payload = {**_SNAPSHOT_PAYLOAD, "high": "not-a-number"}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    snapshot = await _gateway(handler).get_instrument_snapshot("AAPL")
+
+    assert snapshot.high is None
+    assert snapshot.low == Decimal("209.50000")
+
+
+@pytest.mark.anyio
+async def test_get_instrument_snapshot_unsupported_ticker_via_404() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"code": 404, "message": "not found", "status": "error"})
+
+    with pytest.raises(TickerUnsupportedError):
+        await _gateway(handler).get_instrument_snapshot("NOTATICKER")
+
+
+@pytest.mark.anyio
+async def test_get_instrument_snapshot_rate_limited_raises_rate_limited_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"code": 429, "message": "limit", "status": "error"})
+
+    with pytest.raises(MarketDataRateLimitedError):
+        await _gateway(handler).get_instrument_snapshot("AAPL")
+
+
+@pytest.mark.anyio
+async def test_get_instrument_snapshot_timeout_raises_timeout_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out")
+
+    with pytest.raises(MarketDataTimeoutError):
+        await _gateway(handler).get_instrument_snapshot("AAPL")
+
+
+@pytest.mark.anyio
+async def test_get_instrument_snapshot_malformed_json_raises_malformed_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not json at all")
+
+    with pytest.raises(MarketDataMalformedResponseError):
+        await _gateway(handler).get_instrument_snapshot("AAPL")
+
+
+@pytest.mark.anyio
+async def test_get_instrument_snapshot_missing_core_fields_raises_malformed_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"symbol": "AAPL"})
+
+    with pytest.raises(MarketDataMalformedResponseError):
+        await _gateway(handler).get_instrument_snapshot("AAPL")
+
+
+@pytest.mark.anyio
+async def test_get_instrument_snapshot_sends_api_key_as_header_not_query_param() -> None:
+    seen_url = ""
+    seen_auth_header = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_url, seen_auth_header
+        seen_url = str(request.url)
+        seen_auth_header = request.headers.get("Authorization", "")
+        return httpx.Response(200, json=_SNAPSHOT_PAYLOAD)
+
+    await _gateway(handler).get_instrument_snapshot("AAPL")
+
+    assert _FAKE_API_KEY not in seen_url
+    assert seen_auth_header == f"apikey {_FAKE_API_KEY}"

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import {
   addWatchlistItem,
   getWatchlistQuotes,
@@ -227,7 +228,12 @@ export default function WatchlistPanel() {
               return (
                 <li key={item.id}>
                   <div className="watchlist-row-main">
-                    <span className="watchlist-ticker">{item.ticker}</span>
+                    <Link
+                      href={`/instruments/${encodeURIComponent(item.ticker)}`}
+                      className="watchlist-ticker"
+                    >
+                      {item.ticker}
+                    </Link>
                     <span className="watchlist-created-at">
                       {formatCreatedAt(item.created_at)}
                     </span>
