@@ -12,7 +12,7 @@ ticker, ADR-0004 §25/§466).
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +43,22 @@ class WatchlistRepository:
         except IntegrityError as exc:
             raise DuplicateTickerError(ticker) from exc
         return _to_domain(model)
+
+    async def remove(self, item_id: int) -> bool:
+        """Delete by id in a single statement.
+
+        Returns `True` if a row was deleted, `False` if no row matched
+        `item_id` — a missing row is not an error at this layer (there
+        is no exception to translate, unlike `add()`'s UNIQUE
+        violation); the application layer decides what "not found"
+        means (`WatchlistItemNotFoundError`).
+        """
+        result = await self._session.execute(
+            delete(WatchlistItemModel)
+            .where(WatchlistItemModel.id == item_id)
+            .returning(WatchlistItemModel.id)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def list_all(self) -> list[WatchlistItem]:
         """List all items, oldest first.

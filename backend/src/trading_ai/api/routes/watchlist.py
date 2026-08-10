@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,9 +22,14 @@ from trading_ai.watchlist.domain import (
     DuplicateTickerError,
     InvalidTickerError,
     WatchlistItem,
+    WatchlistItemNotFoundError,
 )
 from trading_ai.watchlist.repository import WatchlistRepository
-from trading_ai.watchlist.use_cases import AddWatchlistItem, ListWatchlistItems
+from trading_ai.watchlist.use_cases import (
+    AddWatchlistItem,
+    ListWatchlistItems,
+    RemoveWatchlistItem,
+)
 
 router = APIRouter()
 
@@ -99,6 +104,12 @@ def get_list_watchlist_items_use_case(
     return ListWatchlistItems(repository)
 
 
+def get_remove_watchlist_item_use_case(
+    repository: Annotated[WatchlistRepository, Depends(get_watchlist_repository)],
+) -> RemoveWatchlistItem:
+    return RemoveWatchlistItem(repository)
+
+
 @router.post(
     "/watchlist",
     status_code=status.HTTP_201_CREATED,
@@ -118,6 +129,15 @@ async def list_watchlist_items(
 ) -> list[WatchlistItemResponse]:
     items = await use_case.execute()
     return [_to_response(item) for item in items]
+
+
+@router.delete("/watchlist/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_watchlist_item(
+    item_id: int,
+    use_case: Annotated[RemoveWatchlistItem, Depends(get_remove_watchlist_item_use_case)],
+) -> Response:
+    await use_case.execute(item_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def register_watchlist_exception_handlers(app: FastAPI) -> None:
@@ -144,4 +164,13 @@ def register_watchlist_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={"detail": exc.reason},
+        )
+
+    @app.exception_handler(WatchlistItemNotFoundError)
+    async def _handle_item_not_found(
+        _request: Request, _exc: WatchlistItemNotFoundError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "watchlist item not found"},
         )

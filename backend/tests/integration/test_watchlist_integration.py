@@ -60,6 +60,28 @@ def _delete_ticker(ticker: str) -> None:
     asyncio.run(_run())
 
 
+def _count_ticker(ticker: str) -> int:
+    """Direct read against PostgreSQL — independent of the API layer."""
+    test_database_url = _TEST_DATABASE_URL
+    assert test_database_url is not None
+
+    async def _run() -> int:
+        from trading_ai.infrastructure.database.engine import create_database_engine
+
+        engine = create_database_engine(test_database_url)
+        try:
+            async with engine.connect() as connection:
+                result = await connection.execute(
+                    text("SELECT count(*) FROM watchlist_items WHERE ticker = :ticker"),
+                    {"ticker": ticker},
+                )
+                return int(result.scalar_one())
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
 @pytest.fixture
 def watchlist_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     test_database_url = _TEST_DATABASE_URL
@@ -126,6 +148,36 @@ def test_duplicate_post_with_different_case_is_still_rejected(
         assert second.status_code == 409
     finally:
         _delete_ticker(ticker)
+
+
+@pytest.mark.skipif(not _TEST_DATABASE_URL, reason=_SKIP_REASON)
+def test_delete_removes_a_real_row_and_second_delete_returns_404(
+    watchlist_client: TestClient,
+) -> None:
+    ticker = _unique_ticker()
+    other_ticker = _unique_ticker()
+    try:
+        created = watchlist_client.post("/watchlist", json={"ticker": ticker})
+        assert created.status_code == 201
+        item_id = created.json()["id"]
+
+        other_created = watchlist_client.post("/watchlist", json={"ticker": other_ticker})
+        assert other_created.status_code == 201
+
+        delete_response = watchlist_client.delete(f"/watchlist/{item_id}")
+        assert delete_response.status_code == 204
+        assert delete_response.content == b""
+
+        # Direct PostgreSQL read, independent of the API layer.
+        assert _count_ticker(ticker) == 0
+        # The other item is untouched.
+        assert _count_ticker(other_ticker) == 1
+
+        second_delete_response = watchlist_client.delete(f"/watchlist/{item_id}")
+        assert second_delete_response.status_code == 404
+    finally:
+        _delete_ticker(ticker)
+        _delete_ticker(other_ticker)
 
 
 @pytest.mark.skipif(not _TEST_DATABASE_URL, reason=_SKIP_REASON)

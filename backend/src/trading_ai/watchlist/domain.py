@@ -48,6 +48,14 @@ class DuplicateTickerError(WatchlistError):
         self.ticker = ticker
 
 
+class WatchlistItemNotFoundError(WatchlistError):
+    """Raised when a watchlist item id does not exist (e.g. on remove)."""
+
+    def __init__(self, item_id: int) -> None:
+        super().__init__(f"watchlist item not found: {item_id}")
+        self.item_id = item_id
+
+
 def normalize_ticker(raw: str) -> str:
     """Trim, uppercase, and validate a raw ticker string.
 
