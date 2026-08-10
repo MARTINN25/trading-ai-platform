@@ -34,6 +34,33 @@ class MarketQuote:
     source: str
 
 
+@dataclass(frozen=True, slots=True)
+class InstrumentSnapshot:
+    """A richer, point-in-time snapshot for the instrument details page.
+
+    Same core fields as `MarketQuote` (ticker/price/change/
+    change_percent/as_of/source) plus open/high/low/previous_close/
+    volume — Twelve Data's `/quote` response already includes these
+    (confirmed against the documented contract), so no second endpoint
+    call is needed. Each optional field is `None`, never a guessed `0`,
+    when the provider's response didn't include or couldn't parse it
+    (see `gateway._optional_decimal`/`_optional_int`) — a missing value
+    must never be displayed as if it were real data.
+    """
+
+    ticker: str
+    price: Decimal
+    change: Decimal
+    change_percent: Decimal
+    open: Decimal | None
+    high: Decimal | None
+    low: Decimal | None
+    previous_close: Decimal | None
+    volume: int | None
+    as_of: datetime
+    source: str
+
+
 class MarketDataError(Exception):
     """Base class for market-data gateway errors.
 

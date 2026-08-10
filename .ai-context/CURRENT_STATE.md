@@ -2,7 +2,7 @@
 
 **Статус:** Утверждён
 **Владелец:** Product Owner
-**Дата последнего изменения:** 2026-08-05
+**Дата последнего изменения:** 2026-08-10
 **Назначение:** предоставить AI-агентам краткий актуальный контекст перед началом задачи.
 
 Это оперативный, не архитектурный источник состояния (см. `docs/processes/DOCUMENTATION_STANDARD.md`, раздел 3). При расхождении с `PROJECT_CHARTER.md` или утверждёнными ADR приоритет имеют они.
@@ -53,18 +53,17 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
-Watchlist Market Data Vertical Slice (ветка `feat/watchlist-market-data`) — реальные рыночные данные (price/change/change_percent/as_of/source) для каждого watchlist-тикера:
+Instrument Details Vertical Slice (ветка `feat/instrument-details`) — отдельная страница инструмента (`/instruments/{ticker}`), открывается кликом по тикеру в watchlist:
 
-- **provider — implementation decision, не ADR.** Конкретный market-data provider не был утверждённым архитектурным решением (`CURRENT_STATE.md`, раздел 5, «конкретные источники данных и лицензии»); задача была явно остановлена перед написанием production-кода, найденные варианты (Alpha Vantage/Finnhub/Twelve Data) и их ToS/rate-limit trade-offs представлены Product Owner; **Twelve Data выбран Product Owner как implementation decision** (официальный документированный REST API, без scraping, free-tier с API key) — это НЕ заменяет и не предвосхищает возможный будущий ADR, если provider станет жёсткой платформенной зависимостью;
-- `backend/src/trading_ai/market_data/` — `types.py` (provider-neutral `MarketQuote` + error taxonomy: unavailable/timeout/rate-limited/unsupported-ticker/malformed-response, mirrors `llm_gateway` pattern из `ADR-0007` §20–22, не HTTPException), `gateway.py` (единственное место с `httpx`/URL/response-shape Twelve Data; API key — только в HTTP-заголовке `Authorization`, никогда в query-параметре URL);
-- watchlist application: `ListWatchlistItemsWithQuotes` — последовательный (не параллельный, не unbounded fan-out) вызов gateway на каждый item; один сбойный ticker не роняет весь список — становится safe-категорией (`timeout`/`rate_limited`/`unsupported`/`unavailable`) в результате, не exception;
-- API: `GET /watchlist/quotes` — отдельный endpoint (не меняет контракт `GET /watchlist`), `503` если provider не сконфигурирован, `200` с `quote_error` на элемент при частичном сбое;
-- `TRADING_AI_MARKET_DATA_API_KEY` — опциональная env-переменная (как `TRADING_AI_DATABASE_URL`), без default; ключ не логируется, не возвращается в API, не передаётся во frontend;
-- **реальный инцидент, найденный и исправленный в этой же задаче:** `httpx`'s собственное INFO-логирование писало полный URL (с API key как query-параметром) в структурированные логи backend — исправлено централизованно в `trading_ai/logging.py` (httpx/httpcore logger level поднят до WARNING) и defense-in-depth в `gateway.py` (key переведён из query-параметра в заголовок); оба фикса покрыты regression-тестами и подтверждены живым вызовом Twelve Data после фикса — leak устранён, чистые логи (`operation`/`ticker`/`source`/`status`/`latency_ms`, без URL/key);
-- frontend: `getWatchlistQuotes()`/`WatchlistItemQuote` в `watchlist-api.ts`; `WatchlistPanel.tsx` показывает price/change/change_percent (явный `+`/`-`/`±` в тексте, не только цветом, plus aria-label направления)/as_of, «Данные недоступны» вместо `0`/выдумки, кнопка «Обновить данные» (одноразовая ручная загрузка, без auto-polling); add/delete теперь перезагружают список через тот же quotes-endpoint вместо локального сплайса — новая запись сразу получает котировку;
-- не добавлены: portfolio/trades/positions, LLM, charts, WebSocket, Redis, Kafka, worker, scheduled polling, caching layer, generic provider framework, UI/state-management framework, auth.
+- **Twelve Data остаётся implementation decision**, без изменений и без нового ADR — та же граница provider-neutral контракта, что и в Watchlist Market Data Vertical Slice;
+- `backend/src/trading_ai/market_data/types.py` — добавлен `InstrumentSnapshot` (superset `MarketQuote`: + `open`/`high`/`low`/`previous_close`/`volume`, все — честно `None`, если provider их не вернул, никогда придуманный `0`);
+- `backend/src/trading_ai/market_data/gateway.py` — `TwelveDataGateway.get_instrument_snapshot()` переиспользует тот же `/quote`-запрос, что и `get_quote()` (второй provider-эндпоинт не понадобился — Twelve Data уже возвращает open/high/low/previous_close/volume в этом ответе); статус-код/shape-валидация вынесена в общий `_validate_payload()`, чтобы не дублировать её между `MarketQuote`- и `InstrumentSnapshot`-парсингом;
+- `backend/src/trading_ai/market_data/use_cases.py` (новый файл) — `GetInstrumentDetails`, зависит только от gateway, **не создаёт database session** — это чистый market-data lookup, не связанный с watchlist persistence;
+- `backend/src/trading_ai/api/routes/instruments.py` (новый файл) — `GET /instruments/{ticker}`; `422` невалидный тикер (`InvalidTickerError` уже обрабатывается глобальным handler'ом из watchlist), `404` тикер не поддерживается, `503` provider недоступен/rate limit, `504` timeout; ни один ответ не содержит сырой provider payload/URL/exception text;
+- frontend: `frontend/src/lib/instrument-api.ts` (новый, отдельный от `watchlist-api.ts` typed client), `frontend/src/app/instruments/[ticker]/page.tsx` + `frontend/src/components/InstrumentDetailsView.tsx` (loading/error/retry state, back-ссылка через `next/link`, positive/negative никогда только цветом); `WatchlistPanel.tsx` — тикер теперь `<Link href="/instruments/{ticker}">` вместо `<span>`;
+- не добавлены: charts, news, fundamentals, portfolio, orders, LLM, auth, WebSocket, background polling, candles, Redis, worker, caching layer, UI/state-management framework.
 
-Реально проверено: opt-in `live_provider`-маркированный smoke-тест против настоящего Twelve Data (отдельный файл, никогда не пересекается с обычным `-m integration`), реальные `GET /watchlist/quotes` для AAPL/MSFT (включая наблюдение настоящего `429 Too Many Requests` free-tier и корректную graceful-деградацию до «Данные недоступны»), `pytest -v`/`mypy --strict`, PostgreSQL integration-тесты (реальные watchlist rows + fake gateway — без живых provider-вызовов в обычном suite), `npm run type-check`/`npm run build`, полный ручной browser-сценарий (headless Chromium): реальные котировки, «Обновить данные», add/delete flow не сломаны. Поиск по репозиторию и scratch-файлам подтвердил отсутствие утечки ключа (`secret_leak_detected=false`). Тестовые данные (AAPL/MSFT) удалены; dev-серверы остановлены; PostgreSQL оставлен healthy.
+Реально проверено: `pytest -v` (79 тестов, включая новые unit-тесты gateway/use-case/API-route: успешный snapshot, отсутствующее/неразбираемое опциональное поле → `None`, unsupported ticker, rate limit, timeout, malformed response, no-secret-leakage) и `mypy` — чисто; `npm run type-check`/`npm run build` — чисто, `/instruments/[ticker]` собирается как dynamic route; полный ручной browser-сценарий (headless Chromium) с настоящим Twelve Data: add AAPL → watchlist показывает цену → клик по AAPL → `/instruments/AAPL` с реальными open/high/low/previous_close/volume/updated/source → back-ссылка → прямой заход по URL и `F5`-обновление работают → реальный `503` (сработал free-tier rate limit после серии запросов) корректно показал «Рыночные данные сейчас недоступны» с кнопкой «Повторить» без поломки страницы → повторный клик «Повторить» восстановил реальные данные. Поиск по логам backend/frontend и production frontend-бандлу подтвердил отсутствие утечки ключа. Тестовая запись (AAPL) удалена из watchlist; dev-серверы остановлены; PostgreSQL оставлен healthy (не поднимался и не останавливался этой задачей — уже был запущен).
 
 ## 5. Что ещё не утверждено
 
@@ -132,15 +131,15 @@ Watchlist Market Data Vertical Slice (ветка `feat/watchlist-market-data`) �
 
 ## 7. Последняя завершённая задача
 
-Watchlist Remove Item Vertical Slice.
+Watchlist Market Data Vertical Slice.
 
 ## 8. Текущая задача
 
-Watchlist Market Data Vertical Slice — на ревью.
+Instrument Details Vertical Slice — на ревью.
 
 ## 9. Следующий планируемый блок
 
-instrument details/chart либо следующий продуктовый vertical slice — после ревью Watchlist Market Data Vertical Slice.
+historical price data / chart — после ревью Instrument Details Vertical Slice.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 

@@ -202,6 +202,36 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8000/watchlist/quotes" -Method Get
 - provider-запрос ограничен таймаутом (5 секунд), без автоматических retry;
 - тикеры запрашиваются последовательно, не параллельным веером — у Twelve Data нет официально документированного multi-symbol quote endpoint на базовом плане.
 
+#### Instrument details
+
+`GET /instruments/{ticker}` — отдельный, read-only lookup по одному тикеру для страницы деталей инструмента (переход из watchlist по клику на тикер). В отличие от `GET /watchlist/quotes`, эта операция **не трогает БД и не создаёт database session** — это чистый market-data lookup, не связанный с watchlist persistence.
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/instruments/AAPL" -Method Get
+```
+
+Пример ответа:
+
+```json
+{
+  "ticker": "AAPL",
+  "price": "213.45",
+  "change": "2.31",
+  "change_percent": "1.09",
+  "open": "210.00",
+  "high": "214.20",
+  "low": "209.50",
+  "previous_close": "211.14",
+  "volume": 48213456,
+  "as_of": "2026-08-10T20:00:00Z",
+  "source": "twelvedata"
+}
+```
+
+`open`/`high`/`low`/`previous_close`/`volume` берутся из того же `/quote`-ответа Twelve Data, который уже запрашивается для `GET /watchlist/quotes` — второй provider-эндпоинт не нужен. Любое из этих полей — `null` (никогда выдуманный `0`), если provider его не вернул или не удалось разобрать значение; `price`/`change`/`change_percent`/`as_of` обязательны — их отсутствие/некорректность превращает весь ответ в контролируемую ошибку, а не в частично заполненный объект.
+
+Ошибки: некорректный `ticker` → `422`; тикер не поддерживается provider'ом → `404`; provider недоступен или rate limit → `503`; provider не ответил за 5 секунд → `504`. Ни один из этих ответов не содержит сырой payload provider'а, URL с ключом или текст исключения.
+
 #### CORS
 
 Backend по умолчанию **не** разрешает cross-origin запросы браузера. `main.py` включает минимальный `CORSMiddleware`, без credentials (`allow_credentials=False`), только `GET`/`POST`/`DELETE`, только `Content-Type` в разрешённых заголовках; список origins задаётся через `TRADING_AI_CORS_ORIGINS` (парсинг централизован в `config.py`) — **не** захардкожен в `main.py`.
@@ -258,3 +288,16 @@ npm run build
 11. кнопка «Обновить данные» — одноразовая ручная перезагрузка списка и котировок; автоматического опроса/polling нет.
 
 Frontend не создаёт своего backend-эндпоинта — использует только существующие `GET /watchlist`, `POST /watchlist`, `DELETE /watchlist/{id}`, `GET /watchlist/quotes`. Редактирование записей UI не поддерживает — этого не поддерживает и backend. Market data — только отображение: **не торговое исполнение и не рекомендация**.
+
+#### Instrument details UI
+
+Клик по тикеру в watchlist (обычная Next.js `<Link>`-навигация, не `window.location`) открывает `/instruments/{ticker}` — отдельную страницу с более подробной рыночной информацией по одному инструменту:
+
+1. крупная цена и абсолютное/процентное изменение с явным знаком (не только цветом) в верхней части страницы;
+2. `Open` / `High` / `Low` / `Previous close` / `Volume` / `Updated` / `Source` — сеткой ниже; любое значение, которого нет в ответе backend, показывается как «Данные недоступны», никогда `0`;
+3. `← Назад к watchlist` — ссылка на `/`;
+4. состояние загрузки, пока запрос к backend не завершился;
+5. если запрос не удался (provider недоступен/rate limit/timeout/тикер не найден) — понятное сообщение на русском и кнопка «Повторить» (без автоматических бесконечных retry); остальная часть страницы (back-ссылка, disclaimer) остаётся доступной;
+6. обновление страницы (`F5`) — данные запрашиваются заново (`cache: "no-store"`), как и в watchlist.
+
+Страница не использует UI-библиотек, WebSocket, фонового опроса, графиков, новостей, fundamentals или portfolio/orders — это следующий шаг vertical slice (см. `.ai-context/CURRENT_STATE.md`).

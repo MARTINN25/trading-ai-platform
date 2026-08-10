@@ -16,6 +16,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from trading_ai.api.routes.health import router as health_router
+from trading_ai.api.routes.instruments import register_instruments_exception_handlers
+from trading_ai.api.routes.instruments import router as instruments_router
 from trading_ai.api.routes.ready import router as ready_router
 from trading_ai.api.routes.watchlist import register_watchlist_exception_handlers
 from trading_ai.api.routes.watchlist import router as watchlist_router
@@ -99,7 +101,9 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(ready_router)
     app.include_router(watchlist_router)
+    app.include_router(instruments_router)
     register_watchlist_exception_handlers(app)
+    register_instruments_exception_handlers(app)
     return app
 
 
