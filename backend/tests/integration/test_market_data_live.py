@@ -17,15 +17,20 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 
+from trading_ai.ai.gateway import XAIGateway
+from trading_ai.ai.types import HistorySummaryFact, InstrumentAnalysisInput, PriceContextFact
 from trading_ai.market_data.gateway import TwelveDataGateway
 from trading_ai.market_data.news_gateway import FinnhubNewsGateway
 from trading_ai.market_data.types import InstrumentHistoryPeriod
 
 _LIVE_API_KEY = os.environ.get("TRADING_AI_LIVE_MARKET_DATA_API_KEY")
 _LIVE_NEWS_API_KEY = os.environ.get("TRADING_AI_LIVE_NEWS_API_KEY")
+_LIVE_LLM_API_KEY = os.environ.get("TRADING_AI_LIVE_LLM_API_KEY")
 
 
 @pytest.mark.live_provider
@@ -99,3 +104,66 @@ def test_live_instrument_news_smoke() -> None:
             assert item.url.startswith("http://") or item.url.startswith("https://")
         published_ats = [item.published_at for item in news.items]
         assert published_ats == sorted(published_ats, reverse=True)
+
+
+@pytest.mark.live_provider
+@pytest.mark.skipif(
+    not _LIVE_LLM_API_KEY,
+    reason=(
+        "TRADING_AI_LIVE_LLM_API_KEY is not set - skipping live AI "
+        "analysis provider smoke test (opt-in only)."
+    ),
+)
+def test_live_instrument_analysis_smoke() -> None:
+    """One real call (task scope §19: "не тратить десятки API calls").
+
+    Builds a minimal, hand-constructed `InstrumentAnalysisInput`
+    directly — this test exists specifically to confirm the real xAI
+    request/response contract (structured output, field names), not to
+    re-exercise the use-case's own data-assembly logic (already covered
+    by `test_ai_use_cases.py` with fakes).
+    """
+    assert _LIVE_LLM_API_KEY is not None
+    gateway = XAIGateway(api_key=_LIVE_LLM_API_KEY)
+
+    analysis_input = InstrumentAnalysisInput(
+        ticker="AAPL",
+        price=PriceContextFact(
+            ticker="AAPL",
+            price=Decimal("213.45"),
+            change=Decimal("-2.31"),
+            change_percent=Decimal("-1.09"),
+            open=Decimal("215.00"),
+            high=Decimal("216.00"),
+            low=Decimal("212.00"),
+            previous_close=Decimal("215.76"),
+            volume=48_213_456,
+            as_of=datetime.now(timezone.utc),
+            quote_available=True,
+        ),
+        history=HistorySummaryFact(
+            period="1M",
+            first_close=Decimal("200.00"),
+            last_close=Decimal("213.45"),
+            min_close=Decimal("195.00"),
+            max_close=Decimal("220.00"),
+            points_count=22,
+            history_available=True,
+        ),
+        news=(),
+        news_available=False,
+    )
+
+    analysis = asyncio.run(gateway.generate_instrument_analysis(analysis_input))
+
+    assert analysis.ticker == "AAPL"
+    assert analysis.summary != ""
+    assert analysis.price_context != ""
+    assert analysis.news_context != ""
+    assert len(analysis.risks) >= 1
+    assert analysis.disclaimer != ""
+    assert analysis.generated_at.tzinfo is not None
+    assert analysis.provider == "xai"
+    # No chain-of-thought/internal-reasoning field exists on this type
+    # at all (task scope §14) — nothing to strip, nothing to assert
+    # away here beyond the structural guarantee of the dataclass itself.

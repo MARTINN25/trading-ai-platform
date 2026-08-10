@@ -71,6 +71,17 @@ export interface InstrumentNewsResponse {
   items: InstrumentNewsItem[];
 }
 
+export interface InstrumentAiAnalysis {
+  ticker: string;
+  generated_at: string;
+  summary: string;
+  price_context: string;
+  news_context: string;
+  risks: string[];
+  disclaimer: string;
+  source: string;
+}
+
 export type InstrumentApiErrorKind =
   | "invalid"
   | "not-found"
@@ -397,6 +408,95 @@ export async function getInstrumentNews(ticker: string): Promise<InstrumentNewsR
   }
 
   if (!isInstrumentNewsResponse(data)) {
+    throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
+  }
+  return data;
+}
+
+function isInstrumentAiAnalysis(value: unknown): value is InstrumentAiAnalysis {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.ticker === "string" &&
+    typeof candidate.generated_at === "string" &&
+    typeof candidate.summary === "string" &&
+    typeof candidate.price_context === "string" &&
+    typeof candidate.news_context === "string" &&
+    Array.isArray(candidate.risks) &&
+    candidate.risks.every((risk) => typeof risk === "string") &&
+    typeof candidate.disclaimer === "string" &&
+    typeof candidate.source === "string"
+  );
+}
+
+/**
+ * POST, never automatic — the caller (`AiAnalysisSection.tsx`) only
+ * calls this from an explicit "Сгенерировать AI-анализ"/"Обновить
+ * AI-анализ" button click, never on page load, `F5`, chart-period
+ * switch, or news load (task scope §11: cost discipline — one click
+ * is at most one generation call, and this client never retries
+ * automatically either).
+ *
+ * No prompt is ever sent — the backend accepts no request body for
+ * this endpoint at all (task scope §6).
+ */
+export async function generateInstrumentAnalysis(ticker: string): Promise<InstrumentAiAnalysis> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/instruments/${encodeURIComponent(ticker)}/analysis`, {
+      method: "POST",
+      cache: "no-store",
+    });
+  } catch {
+    throw new InstrumentApiError(
+      "network",
+      "Не удалось соединиться с сервером. Проверьте, что backend запущен, и повторите попытку."
+    );
+  }
+
+  if (response.status === 422) {
+    throw new InstrumentApiError(
+      "invalid",
+      "Некорректный тикер.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 504) {
+    throw new InstrumentApiError(
+      "timeout",
+      "AI-провайдер не ответил вовремя. Попробуйте ещё раз.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 503) {
+    throw new InstrumentApiError(
+      "unavailable",
+      "AI-анализ сейчас недоступен. Попробуйте ещё раз позже.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (!response.ok) {
+    const backendDetail = await readBackendDetail(response);
+    throw new InstrumentApiError(
+      "unexpected",
+      "Не удалось сгенерировать AI-анализ. Попробуйте ещё раз.",
+      backendDetail
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new InstrumentApiError("unexpected", "Backend вернул некорректный ответ.");
+  }
+
+  if (!isInstrumentAiAnalysis(data)) {
     throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
   }
   return data;

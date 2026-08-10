@@ -15,7 +15,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from trading_ai.ai.gateway import XAIGateway
 from trading_ai.api.routes.health import router as health_router
+from trading_ai.api.routes.instruments import register_ai_analysis_exception_handlers
 from trading_ai.api.routes.instruments import register_instruments_exception_handlers
 from trading_ai.api.routes.instruments import router as instruments_router
 from trading_ai.api.routes.ready import router as ready_router
@@ -80,6 +82,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("TRADING_AI_NEWS_API_KEY is not set; instrument news is disabled.")
         app.state.news_gateway = None
 
+    # Same optional-feature pattern, third separate provider/secret
+    # (xAI, ADR-0007 §64): no key, no gateway,
+    # POST /instruments/{ticker}/analysis reports 503 — nothing else
+    # is affected.
+    if settings.llm_api_key is not None:
+        app.state.ai_gateway = XAIGateway(api_key=settings.llm_api_key, model=settings.llm_model)
+    else:
+        logger.warning("TRADING_AI_LLM_API_KEY is not set; AI analysis is disabled.")
+        app.state.ai_gateway = None
+
     try:
         yield
     finally:
@@ -114,6 +126,7 @@ def create_app() -> FastAPI:
     app.include_router(instruments_router)
     register_watchlist_exception_handlers(app)
     register_instruments_exception_handlers(app)
+    register_ai_analysis_exception_handlers(app)
     return app
 
 
