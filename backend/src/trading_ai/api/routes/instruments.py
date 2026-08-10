@@ -19,12 +19,13 @@ from pydantic import BaseModel
 
 from trading_ai.market_data.gateway import TwelveDataGateway
 from trading_ai.market_data.types import (
+    InvalidPeriodError,
     MarketDataError,
     MarketDataRateLimitedError,
     MarketDataTimeoutError,
     TickerUnsupportedError,
 )
-from trading_ai.market_data.use_cases import GetInstrumentDetails
+from trading_ai.market_data.use_cases import GetInstrumentDetails, GetInstrumentPriceHistory
 
 router = APIRouter()
 
@@ -51,6 +52,27 @@ class InstrumentDetailsResponse(BaseModel):
     source: str
 
 
+class InstrumentHistoryPointResponse(BaseModel):
+    """Only what the line chart needs — OHLC/volume stay internal to
+    `PricePoint` (task scope §5: don't carry fields the UI doesn't use)."""
+
+    timestamp: datetime
+    close: Decimal
+
+
+class InstrumentHistoryResponse(BaseModel):
+    """`points` is always chronological ASC (`gateway._parse_history`
+    sorts defensively regardless of provider ordering) — never trust
+    the caller to re-sort. An empty `points` list is a valid, non-error
+    response (task scope §5: "пустой набор данных — контролируемый
+    safe response")."""
+
+    ticker: str
+    period: str
+    source: str
+    points: list[InstrumentHistoryPointResponse]
+
+
 def get_market_data_gateway(request: Request) -> TwelveDataGateway:
     """Return the gateway created by the lifespan, or fail controlled.
 
@@ -71,6 +93,12 @@ def get_instrument_details_use_case(
     gateway: Annotated[TwelveDataGateway, Depends(get_market_data_gateway)],
 ) -> GetInstrumentDetails:
     return GetInstrumentDetails(gateway)
+
+
+def get_instrument_price_history_use_case(
+    gateway: Annotated[TwelveDataGateway, Depends(get_market_data_gateway)],
+) -> GetInstrumentPriceHistory:
+    return GetInstrumentPriceHistory(gateway)
 
 
 @router.get("/instruments/{ticker}", response_model=InstrumentDetailsResponse)
@@ -94,6 +122,26 @@ async def get_instrument_details(
     )
 
 
+@router.get("/instruments/{ticker}/history", response_model=InstrumentHistoryResponse)
+async def get_instrument_price_history(
+    ticker: str,
+    period: str,
+    use_case: Annotated[
+        GetInstrumentPriceHistory, Depends(get_instrument_price_history_use_case)
+    ],
+) -> InstrumentHistoryResponse:
+    history = await use_case.execute(ticker, period)
+    return InstrumentHistoryResponse(
+        ticker=history.ticker,
+        period=history.period.value,
+        source=history.source,
+        points=[
+            InstrumentHistoryPointResponse(timestamp=point.timestamp, close=point.close)
+            for point in history.points
+        ],
+    )
+
+
 def register_instruments_exception_handlers(app: FastAPI) -> None:
     """Map market-data errors to safe, controlled HTTP responses.
 
@@ -111,6 +159,13 @@ def register_instruments_exception_handlers(app: FastAPI) -> None:
     (`MarketDataUnavailableError`, `MarketDataMalformedResponseError`)
     — both are safely a 503, never the raw provider/exception detail.
     """
+
+    @app.exception_handler(InvalidPeriodError)
+    async def _handle_invalid_period(_request: Request, exc: InvalidPeriodError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": exc.reason},
+        )
 
     @app.exception_handler(TickerUnsupportedError)
     async def _handle_ticker_unsupported(

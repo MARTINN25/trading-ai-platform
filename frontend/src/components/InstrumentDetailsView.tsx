@@ -7,6 +7,7 @@ import {
   InstrumentApiError,
   type InstrumentDetails,
 } from "@/lib/instrument-api";
+import PriceChartSection from "@/components/PriceChartSection";
 
 type ViewState =
   | { status: "loading" }
@@ -124,6 +125,11 @@ export default function InstrumentDetailsView({ ticker }: { ticker: string }) {
 
         {state.status === "loaded" && <InstrumentDetailsContent data={state.data} />}
       </div>
+
+      {/* Independent of the summary's own loading/error state above —
+          a chart failure never hides an already-loaded summary, and a
+          summary failure never blocks the chart (task scope §9/§13). */}
+      <PriceChartSection ticker={ticker} />
 
       <p className="instrument-disclaimer">
         Рыночные данные — только для просмотра и могут запаздывать; это не торговое исполнение и
