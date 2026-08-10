@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from enum import Enum
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +60,79 @@ class InstrumentSnapshot:
     volume: int | None
     as_of: datetime
     source: str
+
+
+@dataclass(frozen=True, slots=True)
+class PricePoint:
+    """One OHLCV bar for the instrument price-history chart.
+
+    The provider layer keeps the full OHLCV shape even though today's
+    line chart only needs `close` — deciding what actually crosses the
+    wire is the API layer's job (task scope: don't carry fields "for
+    the future" into the HTTP response). `open`/`high`/`low`/`volume`
+    are `None`, not a guessed `0`, whenever Twelve Data's response
+    didn't include or couldn't parse them. `close` is required — a bar
+    without a usable close price is not a valid bar, and the whole
+    history call fails instead of silently dropping it.
+    """
+
+    timestamp: datetime
+    open: Decimal | None
+    high: Decimal | None
+    low: Decimal | None
+    close: Decimal
+    volume: int | None
+
+
+class InstrumentHistoryPeriod(Enum):
+    """Application-level chart period contract.
+
+    Frontend and API only ever see these three fixed values — never a
+    raw Twelve Data `interval`/`outputsize` pair (task scope §3).
+    `gateway.py` is the only place that maps a period to
+    provider-specific request parameters.
+    """
+
+    ONE_DAY = "1D"
+    FIVE_DAY = "5D"
+    ONE_MONTH = "1M"
+
+
+@dataclass(frozen=True, slots=True)
+class PriceHistory:
+    """A requested period's bars for one ticker, already ASC-sorted and provider-neutral."""
+
+    ticker: str
+    period: InstrumentHistoryPeriod
+    source: str
+    points: tuple[PricePoint, ...]
+
+
+class InvalidPeriodError(Exception):
+    """Raised when a requested chart period isn't one of `InstrumentHistoryPeriod`.
+
+    A request-validation error, not a provider-call failure — mirrors
+    `trading_ai.watchlist.domain.InvalidTickerError` (mapped to `422`
+    by the API layer), not `MarketDataError` (mapped to `404`/`503`/
+    `504` — those only happen after a provider call is actually made).
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def normalize_period(raw: str) -> InstrumentHistoryPeriod:
+    """Parse/validate a raw query-param string into `InstrumentHistoryPeriod`.
+
+    Raises `InvalidPeriodError` for anything else — never silently
+    falls back to a default period.
+    """
+    try:
+        return InstrumentHistoryPeriod(raw)
+    except ValueError as exc:
+        allowed = ", ".join(period.value for period in InstrumentHistoryPeriod)
+        raise InvalidPeriodError(f"period must be one of: {allowed}") from exc
 
 
 class MarketDataError(Exception):

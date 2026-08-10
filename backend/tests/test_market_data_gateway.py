@@ -5,14 +5,16 @@ or repository.
 
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 
 import httpx
 import pytest
 
 from trading_ai.market_data.gateway import SOURCE, TwelveDataGateway
 from trading_ai.market_data.types import (
+    InstrumentHistoryPeriod,
     MarketDataMalformedResponseError,
     MarketDataRateLimitedError,
     MarketDataTimeoutError,
@@ -42,6 +44,45 @@ _SNAPSHOT_PAYLOAD = {
     "high": "214.20000",
     "low": "209.50000",
     "volume": "48213456",
+}
+
+_HISTORY_PAYLOAD: dict[str, Any] = {
+    "meta": {
+        "symbol": "AAPL",
+        "interval": "5min",
+        "currency": "USD",
+        "exchange_timezone": "America/New_York",
+        "exchange": "NASDAQ",
+        "mic_code": "XNGS",
+        "type": "Common Stock",
+    },
+    "values": [
+        {
+            "datetime": "2026-08-10 15:20:00",
+            "open": "306.65",
+            "high": "306.735",
+            "low": "306.565",
+            "close": "306.625",
+            "volume": "31152",
+        },
+        {
+            "datetime": "2026-08-10 15:25:00",
+            "open": "306.61",
+            "high": "306.69",
+            "low": "306.43",
+            "close": "306.535",
+            "volume": "48036",
+        },
+        {
+            "datetime": "2026-08-10 15:30:00",
+            "open": "306.53",
+            "high": "306.6",
+            "low": "306.42",
+            "close": "306.59",
+            "volume": "54604",
+        },
+    ],
+    "status": "ok",
 }
 
 
@@ -293,3 +334,193 @@ async def test_get_instrument_snapshot_sends_api_key_as_header_not_query_param()
 
     assert _FAKE_API_KEY not in seen_url
     assert seen_auth_header == f"apikey {_FAKE_API_KEY}"
+
+
+@pytest.mark.anyio
+async def test_get_price_history_maps_successful_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["symbol"] == "AAPL"
+        assert request.url.params["interval"] == "5min"
+        assert request.url.params["timezone"] == "UTC"
+        return httpx.Response(200, json=_HISTORY_PAYLOAD)
+
+    history = await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_DAY)
+
+    assert history.ticker == "AAPL"
+    assert history.period == InstrumentHistoryPeriod.ONE_DAY
+    assert history.source == SOURCE
+    assert len(history.points) == 3
+    first, _, last = history.points
+    assert first.close == Decimal("306.625")
+    assert first.timestamp == datetime(2026, 8, 10, 15, 20, 0, tzinfo=timezone.utc)
+    assert last.close == Decimal("306.59")
+    assert first.open == Decimal("306.65")
+    assert first.volume == 31152
+
+
+@pytest.mark.anyio
+async def test_get_price_history_normalizes_reversed_provider_order_to_asc() -> None:
+    reversed_payload = {**_HISTORY_PAYLOAD, "values": list(reversed(_HISTORY_PAYLOAD["values"]))}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=reversed_payload)
+
+    history = await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_DAY)
+
+    timestamps = [point.timestamp for point in history.points]
+    assert timestamps == sorted(timestamps)
+    assert history.points[0].close == Decimal("306.625")
+    assert history.points[-1].close == Decimal("306.59")
+
+
+@pytest.mark.anyio
+async def test_get_price_history_single_point_is_handled_safely() -> None:
+    payload = {**_HISTORY_PAYLOAD, "values": _HISTORY_PAYLOAD["values"][:1]}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    history = await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_DAY)
+
+    assert len(history.points) == 1
+
+
+@pytest.mark.anyio
+async def test_get_price_history_empty_values_returns_empty_points_not_an_error() -> None:
+    payload = {**_HISTORY_PAYLOAD, "values": []}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    history = await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_DAY)
+
+    assert history.points == ()
+
+
+@pytest.mark.anyio
+async def test_get_price_history_daily_interval_date_only_timestamp() -> None:
+    payload = {
+        "meta": {"symbol": "AAPL", "interval": "1day"},
+        "values": [{"datetime": "2026-08-10", "open": "306.74", "high": "307.46",
+                     "low": "304.64", "close": "306.59", "volume": "3138892"}],
+        "status": "ok",
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    history = await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_MONTH)
+
+    assert history.points[0].timestamp == datetime(2026, 8, 10, 0, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.anyio
+async def test_get_price_history_missing_close_raises_malformed_error() -> None:
+    payload = {
+        **_HISTORY_PAYLOAD,
+        "values": [{"datetime": "2026-08-10 15:20:00", "open": "306.65"}],
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(MarketDataMalformedResponseError):
+        await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_DAY)
+
+
+@pytest.mark.anyio
+async def test_get_price_history_invalid_timestamp_raises_malformed_error() -> None:
+    payload = {
+        **_HISTORY_PAYLOAD,
+        "values": [{"datetime": "not-a-date", "close": "306.59"}],
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(MarketDataMalformedResponseError):
+        await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_DAY)
+
+
+@pytest.mark.anyio
+async def test_get_price_history_missing_values_key_raises_malformed_error() -> None:
+    payload = {"meta": {"symbol": "AAPL"}, "status": "ok"}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(MarketDataMalformedResponseError):
+        await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_DAY)
+
+
+@pytest.mark.anyio
+async def test_get_price_history_optional_field_missing_is_none_not_zero() -> None:
+    payload = {
+        **_HISTORY_PAYLOAD,
+        "values": [{"datetime": "2026-08-10 15:20:00", "close": "306.59"}],
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    history = await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_DAY)
+
+    assert history.points[0].open is None
+    assert history.points[0].volume is None
+    assert history.points[0].close == Decimal("306.59")
+
+
+@pytest.mark.anyio
+async def test_get_price_history_timeout_raises_timeout_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out")
+
+    with pytest.raises(MarketDataTimeoutError):
+        await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_DAY)
+
+
+@pytest.mark.anyio
+async def test_get_price_history_rate_limited_raises_rate_limited_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"code": 429, "message": "limit", "status": "error"})
+
+    with pytest.raises(MarketDataRateLimitedError):
+        await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_DAY)
+
+
+@pytest.mark.anyio
+async def test_get_price_history_unsupported_ticker_via_404() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"code": 404, "message": "not found", "status": "error"})
+
+    with pytest.raises(TickerUnsupportedError):
+        await _gateway(handler).get_price_history("NOTATICKER", InstrumentHistoryPeriod.ONE_DAY)
+
+
+@pytest.mark.anyio
+async def test_get_price_history_sends_api_key_as_header_not_query_param() -> None:
+    seen_url = ""
+    seen_auth_header = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_url, seen_auth_header
+        seen_url = str(request.url)
+        seen_auth_header = request.headers.get("Authorization", "")
+        return httpx.Response(200, json=_HISTORY_PAYLOAD)
+
+    await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_DAY)
+
+    assert _FAKE_API_KEY not in seen_url
+    assert seen_auth_header == f"apikey {_FAKE_API_KEY}"
+
+
+@pytest.mark.anyio
+async def test_get_price_history_no_secret_leakage_in_error_messages() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="Service Unavailable")
+
+    with pytest.raises(MarketDataUnavailableError) as exc_info:
+        await _gateway(handler).get_price_history("AAPL", InstrumentHistoryPeriod.ONE_DAY)
+
+    assert _FAKE_API_KEY not in str(exc_info.value)
+    assert _FAKE_API_KEY not in repr(exc_info.value)

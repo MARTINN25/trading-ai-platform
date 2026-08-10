@@ -53,17 +53,19 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
-Instrument Details Vertical Slice (ветка `feat/instrument-details`) — отдельная страница инструмента (`/instruments/{ticker}`), открывается кликом по тикеру в watchlist:
+Instrument Price History Vertical Slice (ветка `feat/instrument-price-history`) — исторический график цены на `/instruments/{ticker}`, ниже существующей карточки инструмента:
 
-- **Twelve Data остаётся implementation decision**, без изменений и без нового ADR — та же граница provider-neutral контракта, что и в Watchlist Market Data Vertical Slice;
-- `backend/src/trading_ai/market_data/types.py` — добавлен `InstrumentSnapshot` (superset `MarketQuote`: + `open`/`high`/`low`/`previous_close`/`volume`, все — честно `None`, если provider их не вернул, никогда придуманный `0`);
-- `backend/src/trading_ai/market_data/gateway.py` — `TwelveDataGateway.get_instrument_snapshot()` переиспользует тот же `/quote`-запрос, что и `get_quote()` (второй provider-эндпоинт не понадобился — Twelve Data уже возвращает open/high/low/previous_close/volume в этом ответе); статус-код/shape-валидация вынесена в общий `_validate_payload()`, чтобы не дублировать её между `MarketQuote`- и `InstrumentSnapshot`-парсингом;
-- `backend/src/trading_ai/market_data/use_cases.py` (новый файл) — `GetInstrumentDetails`, зависит только от gateway, **не создаёт database session** — это чистый market-data lookup, не связанный с watchlist persistence;
-- `backend/src/trading_ai/api/routes/instruments.py` (новый файл) — `GET /instruments/{ticker}`; `422` невалидный тикер (`InvalidTickerError` уже обрабатывается глобальным handler'ом из watchlist), `404` тикер не поддерживается, `503` provider недоступен/rate limit, `504` timeout; ни один ответ не содержит сырой provider payload/URL/exception text;
-- frontend: `frontend/src/lib/instrument-api.ts` (новый, отдельный от `watchlist-api.ts` typed client), `frontend/src/app/instruments/[ticker]/page.tsx` + `frontend/src/components/InstrumentDetailsView.tsx` (loading/error/retry state, back-ссылка через `next/link`, positive/negative никогда только цветом); `WatchlistPanel.tsx` — тикер теперь `<Link href="/instruments/{ticker}">` вместо `<span>`;
-- не добавлены: charts, news, fundamentals, portfolio, orders, LLM, auth, WebSocket, background polling, candles, Redis, worker, caching layer, UI/state-management framework.
+- **Twelve Data официальный `GET /time_series`** (`https://twelvedata.com/docs#time-series`) — подтверждён против документации и живого free-tier аккаунта перед реализацией (не угадывался по памяти); поддерживает `interval`, `outputsize` (1–5000), `order` (`asc`/`desc`), `timezone` (в т.ч. `UTC`); по умолчанию `desc`, поэтому backend **не доверяет** порядку из ответа и всегда сортирует точки по `timestamp` ASC сам;
+- **Продуктовые периоды — фиксированный enum `1D`/`5D`/`1M`**, никогда сырые Twelve Data `interval`/`outputsize` наружу; backend сам маппит: `1D→5min×100`, `5D→1h×40`, `1M→1day×25` (обоснование — README, «Instrument price history»); free-tier (`8 запросов/минуту`, `800/день`) поддержал все три интервала в живых вызовах — упрощать набор периодов не понадобилось;
+- `backend/src/trading_ai/market_data/types.py` — добавлены `PricePoint` (полный OHLCV, честно `None` для отсутствующих provider-полей), `InstrumentHistoryPeriod` (enum), `PriceHistory` (ticker/period/source/points), `InvalidPeriodError` + `normalize_period()` (мирроит `InvalidTickerError`/`normalize_ticker`, не `MarketDataError` — это request-validation, а не provider-call failure);
+- `backend/src/trading_ai/market_data/gateway.py` — `TwelveDataGateway.get_price_history()`; общий `_get()`-helper для HTTP GET (переиспользуется `/quote` и `/time_series`), общий `_validate_payload()` для статус-кодов/error-shape; сортировка ASC — defensive, не просто request-hint;
+- `backend/src/trading_ai/market_data/use_cases.py` — `GetInstrumentPriceHistory`, зависит только от gateway, **не создаёт database session**, не персистит исторические данные;
+- `backend/src/trading_ai/api/routes/instruments.py` — `GET /instruments/{ticker}/history?period=1D`; `422` невалидный ticker/period, `404` unsupported ticker, `503` unavailable/rate-limit/malformed, `504` timeout; пустой `points` — `200`, не ошибка; ответ содержит только `timestamp`/`close` (не весь OHLCV — "не тащить поля на будущее");
+- frontend: `instrument-api.ts` расширен (`InstrumentHistoryPeriod`/`InstrumentHistoryPoint`/`InstrumentPriceHistory`, `getInstrumentPriceHistory()` — один HTTP-запрос на вызов, без автоматического retry); **новый `PriceChart.tsx`** — небольшой собственный SVG line-chart, **без новой npm-зависимости** (сравнение с `lightweight-charts`/`Recharts` и обоснование выбора — README, «Chart implementation decision»); **новый `PriceChartSection.tsx`** — кнопки периода (`aria-pressed`), independent loading/error/retry state от карточки инструмента (сбой одного не ломает другой — подтверждено вживую реальным `429`), client-side кеш уже загруженных периодов на время визита страницы;
+- rate-limit дисциплина: один chart-запрос = один provider-запрос; при открытии страницы грузится только default (`1D`); `5D`/`1M` — только по клику; без auto-refresh/polling/prefetch всех периодов;
+- не добавлены: technical indicators (EMA/SMA/RSI/MACD), candlestick UI, drawing tools, TradingView embed, WebSocket, realtime streaming, news, fundamentals, portfolio, positions, trades, orders, auth, LLM, Redis, worker, caching, scheduled polling, background jobs.
 
-Реально проверено: `pytest -v` (79 тестов, включая новые unit-тесты gateway/use-case/API-route: успешный snapshot, отсутствующее/неразбираемое опциональное поле → `None`, unsupported ticker, rate limit, timeout, malformed response, no-secret-leakage) и `mypy` — чисто; `npm run type-check`/`npm run build` — чисто, `/instruments/[ticker]` собирается как dynamic route; полный ручной browser-сценарий (headless Chromium) с настоящим Twelve Data: add AAPL → watchlist показывает цену → клик по AAPL → `/instruments/AAPL` с реальными open/high/low/previous_close/volume/updated/source → back-ссылка → прямой заход по URL и `F5`-обновление работают → реальный `503` (сработал free-tier rate limit после серии запросов) корректно показал «Рыночные данные сейчас недоступны» с кнопкой «Повторить» без поломки страницы → повторный клик «Повторить» восстановил реальные данные. Поиск по логам backend/frontend и production frontend-бандлу подтвердил отсутствие утечки ключа. Тестовая запись (AAPL) удалена из watchlist; dev-серверы остановлены; PostgreSQL оставлен healthy (не поднимался и не останавливался этой задачей — уже был запущен).
+Реально проверено: `pytest -v` (121 тест, включая новые unit-тесты gateway/use-case/API-route для истории — успешный ответ, перевёрнутый provider-order → ASC-нормализация, одна точка, пустой `values`, daily date-only timestamp, отсутствующий `close`, невалидный timestamp, отсутствующий `values`, опциональное поле отсутствует → `None`, timeout, rate limit, unsupported ticker, no-secret-leakage) и `mypy` — чисто; opt-in `live_provider` smoke (2 теста, включая новый history-тест: реальный AAPL, >1 точки, ASC, `close > 0`) — passed, вне обычного suite; `npm run type-check`/`npm run build` — чисто. Полный ручной browser-сценарий (headless Chromium) с настоящим Twelve Data: add AAPL → `/instruments/AAPL` → карточка инструмента + график (default `1D`) → переключение `5D`/`1M` → возврат на `1D` без повторного запроса (кеш) → `F5` работает → back-ссылка работает → реальный `429` free-tier во время верификации уронил карточку инструмента 503-ошибкой, при этом график продолжал работать независимо (наглядное живое подтверждение независимости состояний) → «Повторить» восстановил и карточку, и график по отдельности. Поиск по логам backend/frontend и production frontend-бандлу подтвердил отсутствие утечки ключа. Тестовая запись (AAPL) удалена из watchlist; dev-серверы остановлены; PostgreSQL оставлен healthy (не поднимался и не останавливался этой задачей).
 
 ## 5. Что ещё не утверждено
 
@@ -131,15 +133,15 @@ Instrument Details Vertical Slice (ветка `feat/instrument-details`) — о�
 
 ## 7. Последняя завершённая задача
 
-Watchlist Market Data Vertical Slice.
+Instrument Details Vertical Slice.
 
 ## 8. Текущая задача
 
-Instrument Details Vertical Slice — на ревью.
+Instrument Price History Vertical Slice — на ревью.
 
 ## 9. Следующий планируемый блок
 
-historical price data / chart — после ревью Instrument Details Vertical Slice.
+следующий продуктовый vertical slice — после ревью Instrument Price History Vertical Slice.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 

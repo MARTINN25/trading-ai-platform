@@ -32,6 +32,28 @@ export interface InstrumentDetails {
   source: string;
 }
 
+/**
+ * Fixed chart-period contract shared with the backend
+ * (`trading_ai.market_data.types.InstrumentHistoryPeriod`) — never a
+ * raw Twelve Data `interval`/`outputsize` pair (ADR-0007 §20-22-style
+ * provider boundary, applied here to the market-data gateway too).
+ */
+export type InstrumentHistoryPeriod = "1D" | "5D" | "1M";
+
+export interface InstrumentHistoryPoint {
+  timestamp: string;
+  /** Backend `Decimal`, serialized as a string — see `InstrumentDetails.price`. */
+  close: string;
+}
+
+export interface InstrumentPriceHistory {
+  ticker: string;
+  period: InstrumentHistoryPeriod;
+  source: string;
+  /** Always chronological ASC — the backend sorts defensively regardless of provider order. */
+  points: InstrumentHistoryPoint[];
+}
+
 export type InstrumentApiErrorKind =
   | "invalid"
   | "not-found"
@@ -160,6 +182,109 @@ export async function getInstrumentDetails(ticker: string): Promise<InstrumentDe
   }
 
   if (!isInstrumentDetails(data)) {
+    throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
+  }
+  return data;
+}
+
+function isInstrumentHistoryPoint(value: unknown): value is InstrumentHistoryPoint {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.timestamp === "string" && typeof candidate.close === "string";
+}
+
+function isInstrumentPriceHistory(value: unknown): value is InstrumentPriceHistory {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.ticker === "string" &&
+    typeof candidate.period === "string" &&
+    typeof candidate.source === "string" &&
+    Array.isArray(candidate.points) &&
+    candidate.points.every(isInstrumentHistoryPoint)
+  );
+}
+
+/**
+ * One request per call — the caller decides when to fetch (page load
+ * for the default period, a period-button click for the rest). This
+ * client never fetches multiple periods on its own and never retries
+ * automatically (task scope §6: Twelve Data's free tier has already
+ * hit real rate limits — one chart action must mean one request).
+ */
+export async function getInstrumentPriceHistory(
+  ticker: string,
+  period: InstrumentHistoryPeriod
+): Promise<InstrumentPriceHistory> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/instruments/${encodeURIComponent(ticker)}/history?period=${encodeURIComponent(period)}`,
+      {
+        method: "GET",
+        cache: "no-store",
+      }
+    );
+  } catch {
+    throw new InstrumentApiError(
+      "network",
+      "Не удалось соединиться с сервером. Проверьте, что backend запущен, и повторите попытку."
+    );
+  }
+
+  if (response.status === 422) {
+    throw new InstrumentApiError(
+      "invalid",
+      "Некорректный тикер или период графика.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 404) {
+    throw new InstrumentApiError(
+      "not-found",
+      "Инструмент не найден.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 504) {
+    throw new InstrumentApiError(
+      "timeout",
+      "Провайдер рыночных данных не ответил вовремя. Попробуйте ещё раз.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 503) {
+    throw new InstrumentApiError(
+      "unavailable",
+      "График сейчас недоступен. Попробуйте ещё раз позже.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (!response.ok) {
+    const backendDetail = await readBackendDetail(response);
+    throw new InstrumentApiError(
+      "unexpected",
+      "Не удалось загрузить график. Попробуйте ещё раз.",
+      backendDetail
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new InstrumentApiError("unexpected", "Backend вернул некорректный ответ.");
+  }
+
+  if (!isInstrumentPriceHistory(data)) {
     throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
   }
   return data;

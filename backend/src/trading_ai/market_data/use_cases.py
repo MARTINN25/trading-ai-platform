@@ -16,7 +16,12 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from trading_ai.market_data.types import InstrumentSnapshot
+from trading_ai.market_data.types import (
+    InstrumentHistoryPeriod,
+    InstrumentSnapshot,
+    PriceHistory,
+    normalize_period,
+)
 from trading_ai.watchlist.domain import normalize_ticker
 
 
@@ -31,3 +36,23 @@ class GetInstrumentDetails:
     async def execute(self, raw_ticker: str) -> InstrumentSnapshot:
         ticker = normalize_ticker(raw_ticker)
         return await self._gateway.get_instrument_snapshot(ticker)
+
+
+class _InstrumentHistoryGatewayLike(Protocol):
+    async def get_price_history(
+        self, ticker: str, period: InstrumentHistoryPeriod
+    ) -> PriceHistory: ...
+
+
+class GetInstrumentPriceHistory:
+    """Read-only chart-history lookup — same shape as `GetInstrumentDetails`:
+    depends only on the gateway, never opens a database session, never
+    persists anything (task scope §4)."""
+
+    def __init__(self, gateway: _InstrumentHistoryGatewayLike) -> None:
+        self._gateway = gateway
+
+    async def execute(self, raw_ticker: str, raw_period: str) -> PriceHistory:
+        ticker = normalize_ticker(raw_ticker)
+        period = normalize_period(raw_period)
+        return await self._gateway.get_price_history(ticker, period)
