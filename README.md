@@ -344,6 +344,42 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8000/instruments/AAPL/analysis" -Method
 
 Анализ **не персистится** в PostgreSQL, не кешируется и не выполняется фоновой задачей — один HTTP-запрос, один синхронный вызов LLM (ADR-0007 §32: допустимо для синхронного вызова в пределах user-facing timeout).
 
+#### AI quality evaluation
+
+Первый, намеренно небольшой evaluation harness для `GenerateInstrumentAnalysis` (ADR-0007 §52 — evaluation dataset нужен до дальнейшего расширения production-использования модели). **Не пользовательская фича** — frontend её не вызывает и не знает о ней; это dev/CI-инструмент, аналог regression-теста для качества AI-ответа. Не финальная система оценки — baseline, который будет расширяться по мере роста продукта.
+
+Что проверяется на 12 фиксированных, version-controlled сценариях (`backend/src/trading_ai/ai/evaluation/dataset.py`) — рост цены/падение/без изменений, недоступные новости/история/оба, prompt injection в заголовке новости, сенсационный заголовок без подтверждения фактами, скудные данные, противоречивые заголовки, аномально крупное движение цены, отсутствующий объём торгов:
+
+- **SAFETY** — нет BUY/SELL/HOLD, нет target price, обязательный дисклеймер;
+- **STRUCTURE** — валидный JSON-контракт, непустые обязательные поля, risks присутствуют;
+- **PROMPT INJECTION** — заголовок новости не становится инструкцией, system prompt не утекает в ответ;
+- **GROUNDING** (частично) — модель явно признаёт отсутствие news/history, когда они недоступны; **не проверяется** regex-ами полное отсутствие выдуманных фактов — это открытый вопрос, требующий либо человеческого review, либо отдельного, обоснованного решения о model-based evaluation в будущем;
+- **LANGUAGE** — пользовательский текст на русском (эвристика по доле кириллических символов).
+
+**LLM-as-judge не добавлен.** ADR-0007 §52 не требует model-based evaluation — перечисленные инварианты детерминированно проверяемы (структура, безопасные формулировки, признаки инъекции, язык). Semantic factual grounding намеренно не решается регулярными выражениями (см. GROUNDING выше) — это честно задокументированное ограничение baseline, а не задача, которую этот slice claims решённой.
+
+Запуск:
+
+```powershell
+cd backend
+# offline — без сети, без xAI credits, без market/news provider вызовов
+python -m trading_ai.ai.evaluation
+python -m trading_ai.ai.evaluation --offline --case normal-bullish-day
+
+# live — опционально, реальные xAI-вызовы (требует TRADING_AI_LLM_API_KEY в backend/.env)
+python -m trading_ai.ai.evaluation --live              # 3 представительных кейса (по умолчанию)
+python -m trading_ai.ai.evaluation --live --all-cases   # весь датасет — явно, печатает предупреждение о числе вызовов перед стартом
+```
+
+**`python -m pytest` (обычный запуск) не тратит ни одного xAI credit** — offline-évaluation работает на заранее вручную написанных `reference_response` (не реальных ответах модели, задача offline-режима — проверить саму логику оценки на нуле стоимости), а live-путь запускается только через отдельный opt-in `@pytest.mark.live_provider` тест (`backend/tests/integration/test_ai_evaluation_live.py`, использует уже существующую переменную `TRADING_AI_LIVE_LLM_API_KEY`) — ровно 3 кейса, без автоматического retry:
+
+```powershell
+$env:TRADING_AI_LIVE_LLM_API_KEY = "..."
+python -m pytest -m live_provider tests/integration/test_ai_evaluation_live.py -v
+```
+
+Отчёт (`ai/evaluation/report.py`) — простой текст для человека (`Case: <id>` / `PASS`|`FAIL <check>` / `Summary: N/M cases passed`, `K safety violations`) — не dashboard, никогда не печатает полный prompt, полный ответ модели или API-ключ.
+
 #### Instrument search
 
 `GET /instruments/search?q=apple` — поиск инструмента по тикеру или названию, чтобы добавить его в watchlist без необходимости заранее знать точный тикер. Read-only, ничего не сохраняет.
