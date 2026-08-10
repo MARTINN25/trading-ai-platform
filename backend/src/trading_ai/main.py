@@ -26,6 +26,7 @@ from trading_ai.infrastructure.database.engine import create_database_engine
 from trading_ai.infrastructure.database.session import create_session_factory
 from trading_ai.logging import configure_logging
 from trading_ai.market_data.gateway import TwelveDataGateway
+from trading_ai.market_data.news_gateway import FinnhubNewsGateway
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "TRADING_AI_MARKET_DATA_API_KEY is not set; market data is disabled."
         )
         app.state.market_data_gateway = None
+
+    # Same optional-feature pattern, separate provider/secret (Finnhub,
+    # news only): no key, no gateway, GET /instruments/{ticker}/news
+    # reports 503 — nothing else is affected.
+    if settings.news_api_key is not None:
+        app.state.news_gateway = FinnhubNewsGateway(api_key=settings.news_api_key)
+    else:
+        logger.warning("TRADING_AI_NEWS_API_KEY is not set; instrument news is disabled.")
+        app.state.news_gateway = None
 
     try:
         yield

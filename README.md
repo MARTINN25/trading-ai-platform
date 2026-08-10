@@ -272,6 +272,41 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8000/instruments/AAPL/history?period=1D
 
 **Chart implementation decision.** График — небольшой собственный SVG-компонент (`frontend/src/components/PriceChart.tsx`), без новой зависимости: на момент этой задачи `frontend/package.json` содержит только `next`/`react`/`react-dom`, а требуемый график — одна line без zoom/pan/индикаторов/candlestick, для которой полноценная chart-библиотека (`lightweight-charts`, `Recharts`) добавляла бы canvas-рендеринг, императивный жизненный цикл или D3-зависимости без реальной необходимости. `ADR-0003` (раздел 12, 589) явно оставляет charting library предметом отдельной задачи по мере готовности vertical slice — это она и есть. Если будущая задача потребует zoom/pan/candlestick/индикаторы — это станет реальным основанием пересмотреть решение.
 
+#### Instrument news
+
+`GET /instruments/{ticker}/news` — новости по инструменту для страницы деталей, ниже графика цены. Read-only: новости нигде не сохраняются в PostgreSQL, каждый запрос — свежий provider-запрос.
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/instruments/AAPL/news" -Method Get
+```
+
+Пример ответа:
+
+```json
+{
+  "ticker": "AAPL",
+  "source": "finnhub",
+  "items": [
+    {
+      "id": "141175994",
+      "headline": "Apple unveils new product line",
+      "source": "Reuters",
+      "published_at": "2026-08-10T20:00:00Z",
+      "url": "https://finnhub.io/api/news?id=...",
+      "summary": "Apple announced several new products today."
+    }
+  ]
+}
+```
+
+**Provider — отдельное implementation decision, не Twelve Data.** Перед реализацией была проверена ТОЛЬКО официальная документация Twelve Data (полный список endpoints задокументирован и явно не содержит раздела "News"); единственный близкий по смыслу endpoint — `Press releases` (`/press_releases`, Fundamentals) — был проверен живым вызовом и оказался непригоден: в ответе нет ни `source`, ни `url` на оригинальную публикацию (оба — жёсткое требование этой задачи), а `body` — сырой HTML синдицированного, часто промо-контента, упоминающего тикер лишь мимоходом, а не реальная новость по инструменту. Это была явная STOP CONDITION задачи — production-код не писался до решения Product Owner. Были исследованы официальные альтернативы (Finnhub `company-news`, Alpha Vantage `NEWS_SENTIMENT`, Marketaux); **Product Owner выбрал Finnhub** как implementation decision для этой vertical slice (свой отдельный free-tier API key, `TRADING_AI_NEWS_API_KEY`, независимый от `TRADING_AI_MARKET_DATA_API_KEY`). Как и Twelve Data, это implementation choice, а не ADR-level commitment — `backend/src/trading_ai/market_data/types.py` (`InstrumentNewsItem`/`InstrumentNews`) provider-neutral, `backend/src/trading_ai/market_data/news_gateway.py` — единственное место, знающее про Finnhub/httpx.
+
+`GET https://finnhub.io/api/v1/company-news?symbol=...&from=...&to=...` — подтверждён живым вызовом перед реализацией (заголовок `X-Finnhub-Token`, не query-параметр `token`, по той же причине, что и у Twelve Data). Free-tier: `60 запросов/минуту` (подтверждено через `X-Ratelimit-*` заголовки живого ответа), возвращает JSON-массив объектов `headline`/`source`/`datetime` (Unix seconds, UTC)/`url`/`summary`/`id` — сортировка newest-first по умолчанию (backend не доверяет и сортирует сам). Неизвестный/неподдерживаемый тикер отвечает `200 []`, не `404` — Finnhub эту разницу не делает, поэтому `GET /instruments/{ticker}/news` тоже никогда не возвращает `404`, только пустой `items`.
+
+Backend запрашивает фиксированное окно (последние 7 дней) одним provider-запросом на загрузку страницы и обрезает результат до 10 новостей после сортировки — provider не поддерживает server-side `limit`. Каждый отдельный news item, у которого нет `headline`/`source`/валидного `published_at`, или чей `url` не проходит проверку схемы (`http://`/`https://` — `javascript:`/`data:`/`file:` и прочее отбрасываются), молча пропускается — один плохой item не роняет весь список.
+
+Ошибки: некорректный `ticker` → `422`; provider недоступен/rate limit → `503`; timeout → `504`; malformed provider response → `503`. Ни один ответ не содержит сырой provider payload, URL с ключом или текст исключения.
+
 #### CORS
 
 Backend по умолчанию **не** разрешает cross-origin запросы браузера. `main.py` включает минимальный `CORSMiddleware`, без credentials (`allow_credentials=False`), только `GET`/`POST`/`DELETE`, только `Content-Type` в разрешённых заголовках; список origins задаётся через `TRADING_AI_CORS_ORIGINS` (парсинг централизован в `config.py`) — **не** захардкожен в `main.py`.
@@ -356,4 +391,15 @@ Frontend не создаёт своего backend-эндпоинта — исп�
 8. без tooltip/hover, без zoom/pan, без технических индикаторов — вне минимального scope этой задачи;
 9. responsive — график не может выйти за пределы viewport на любой ширине экрана (`overflow: hidden` контейнер, `width: 100%` SVG).
 
-Это следующий шаг vertical slice после первого графика — см. `.ai-context/CURRENT_STATE.md`.
+#### Instrument news UI
+
+Ниже графика цены — секция «Новости», до 10 карточек, newest-first:
+
+1. каждая карточка — headline, краткое summary (только если provider реально его вернул — иначе строки просто нет, никогда не подставляется пустой текст), «Источник · время публикации», ссылка «Открыть источник →»;
+2. ссылка — обычный `<a href>` с `target="_blank"` и `rel="noopener noreferrer"`, ведёт напрямую на оригинальную публикацию; backend не проксирует и не отдаёт HTML статьи — только валидированный `http(s)://` URL;
+3. загрузка новостей — ровно один раз при открытии страницы инструмента; без polling, без auto-refresh, без prefetch из watchlist;
+4. состояние загрузки/ошибки новостей **независимо** от карточки инструмента и графика: сбой любой из трёх секций не скрывает уже загруженные данные в других (проверено вживую: реальный `429` уронил график после `F5`, карточка инструмента и все 10 новостей продолжали отображаться без изменений; отдельно — контролируемый forced-error тест подтвердил, что «Повторить» в секции новостей восстанавливает именно её, не трогая остальные);
+5. пустой список — «Свежих новостей по инструменту нет.»; ошибка provider'а — «Новости сейчас недоступны.» с кнопкой «Повторить»;
+6. без бесконечного scroll, без image-heavy layout, без sentiment-цветов, без AI-меток — вне минимального scope этой задачи.
+
+Следующий планируемый блок — см. `.ai-context/CURRENT_STATE.md`.

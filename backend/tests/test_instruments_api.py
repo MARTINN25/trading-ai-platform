@@ -16,11 +16,14 @@ from fastapi.testclient import TestClient
 
 from trading_ai.api.routes.instruments import (
     get_instrument_details_use_case,
+    get_instrument_news_use_case,
     get_instrument_price_history_use_case,
 )
 from trading_ai.main import create_app
 from trading_ai.market_data.types import (
     InstrumentHistoryPeriod,
+    InstrumentNews,
+    InstrumentNewsItem,
     InstrumentSnapshot,
     InvalidPeriodError,
     MarketDataRateLimitedError,
@@ -377,3 +380,150 @@ def test_get_instrument_price_history_response_never_contains_api_key() -> None:
 
     assert _FAKE_API_KEY not in response.text
     assert "api.twelvedata.com" not in response.text
+
+
+_FAKE_NEWS_API_KEY = "test-finnhub-secret-should-never-leak"
+
+
+class _FakeGetInstrumentNews:
+    def __init__(
+        self, result: InstrumentNews | None = None, error: Exception | None = None
+    ) -> None:
+        self._result = result
+        self._error = error
+        self.received_ticker: str | None = None
+
+    async def execute(self, raw_ticker: str) -> InstrumentNews:
+        self.received_ticker = raw_ticker
+        if self._error is not None:
+            raise self._error
+        assert self._result is not None
+        return self._result
+
+
+def _override_news(app: FastAPI, fake_use_case: _FakeGetInstrumentNews) -> None:
+    app.dependency_overrides[get_instrument_news_use_case] = lambda: fake_use_case
+
+
+def _sample_news(items: tuple[InstrumentNewsItem, ...] | None = None) -> InstrumentNews:
+    if items is None:
+        items = (
+            InstrumentNewsItem(
+                id="141175994",
+                ticker="AAPL",
+                headline="Apple unveils new product line",
+                source="Reuters",
+                published_at=datetime(2026, 8, 10, 15, 20, 0, tzinfo=timezone.utc),
+                url="https://finnhub.io/api/news?id=abc123",
+                summary="Apple announced several new products today.",
+            ),
+        )
+    return InstrumentNews(ticker="AAPL", source="finnhub", items=items)
+
+
+def test_get_instrument_news_success_returns_items() -> None:
+    app = create_app()
+    fake_use_case = _FakeGetInstrumentNews(result=_sample_news())
+    _override_news(app, fake_use_case)
+    client = TestClient(app)
+
+    response = client.get("/instruments/AAPL/news")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ticker"] == "AAPL"
+    assert body["source"] == "finnhub"
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["headline"] == "Apple unveils new product line"
+    assert item["source"] == "Reuters"
+    assert item["url"] == "https://finnhub.io/api/news?id=abc123"
+    assert item["summary"] == "Apple announced several new products today."
+    assert fake_use_case.received_ticker == "AAPL"
+
+
+def test_get_instrument_news_summary_missing_is_null_not_empty_string() -> None:
+    app = create_app()
+    item = InstrumentNewsItem(
+        id="1",
+        ticker="AAPL",
+        headline="Headline",
+        source="Reuters",
+        published_at=datetime.now(timezone.utc),
+        url="https://example.com/a",
+        summary=None,
+    )
+    _override_news(app, _FakeGetInstrumentNews(result=_sample_news(items=(item,))))
+    client = TestClient(app)
+
+    response = client.get("/instruments/AAPL/news")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["summary"] is None
+
+
+def test_get_instrument_news_empty_response_returns_200_with_empty_items() -> None:
+    app = create_app()
+    _override_news(app, _FakeGetInstrumentNews(result=_sample_news(items=())))
+    client = TestClient(app)
+
+    response = client.get("/instruments/AAPL/news")
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+
+
+def test_get_instrument_news_invalid_ticker_returns_422() -> None:
+    app = create_app()
+    _override_news(
+        app, _FakeGetInstrumentNews(error=InvalidTickerError("ticker must not be empty"))
+    )
+    client = TestClient(app)
+
+    response = client.get("/instruments/ /news")
+
+    assert response.status_code == 422
+
+
+def test_get_instrument_news_timeout_returns_504() -> None:
+    app = create_app()
+    _override_news(app, _FakeGetInstrumentNews(error=MarketDataTimeoutError("slow")))
+    client = TestClient(app)
+
+    response = client.get("/instruments/AAPL/news")
+
+    assert response.status_code == 504
+
+
+def test_get_instrument_news_rate_limited_or_unavailable_returns_503() -> None:
+    app = create_app()
+    for error in (MarketDataRateLimitedError("limit"), MarketDataUnavailableError("boom")):
+        _override_news(app, _FakeGetInstrumentNews(error=error))
+        client = TestClient(app)
+
+        response = client.get("/instruments/AAPL/news")
+
+        assert response.status_code == 503
+        assert "boom" not in response.text
+
+
+def test_get_instrument_news_without_provider_configured_returns_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TRADING_AI_NEWS_API_KEY", raising=False)
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/instruments/AAPL/news")
+
+    assert response.status_code == 503
+
+
+def test_get_instrument_news_response_never_contains_api_key_or_provider_url() -> None:
+    app = create_app()
+    _override_news(app, _FakeGetInstrumentNews(result=_sample_news()))
+    client = TestClient(app)
+
+    response = client.get("/instruments/AAPL/news")
+
+    assert _FAKE_NEWS_API_KEY not in response.text
+    assert "finnhub.io/api/v1" not in response.text

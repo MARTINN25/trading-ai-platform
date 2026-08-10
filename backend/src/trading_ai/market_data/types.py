@@ -163,3 +163,35 @@ class TickerUnsupportedError(MarketDataError):
 
 class MarketDataMalformedResponseError(MarketDataError):
     """Provider responded, but the payload didn't match the expected shape."""
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentNewsItem:
+    """One news item for the instrument news section.
+
+    `summary` is `None`, not an invented placeholder string, whenever
+    the provider's response didn't include one (confirmed empirically
+    against real Finnhub `company-news` data: a small fraction of real
+    items have no summary). `url` is guaranteed `http://`/`https://`
+    by construction — `news_gateway._validate_article_url` rejects
+    anything else, and an item that fails validation is dropped before
+    ever reaching this type (task scope §6: unsafe URL schemes must
+    never reach the frontend).
+    """
+
+    id: str
+    ticker: str
+    headline: str
+    source: str
+    published_at: datetime
+    url: str
+    summary: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentNews:
+    """A requested ticker's news items, already newest-first and provider-neutral."""
+
+    ticker: str
+    source: str
+    items: tuple[InstrumentNewsItem, ...]
