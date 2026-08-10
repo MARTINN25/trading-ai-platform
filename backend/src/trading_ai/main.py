@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from trading_ai.api.routes.health import router as health_router
 from trading_ai.api.routes.ready import router as ready_router
@@ -66,6 +67,18 @@ def create_app() -> FastAPI:
         title="AI Trading Assistant Platform",
         version="0.1.0",
         lifespan=lifespan,
+    )
+    # Origins come from Settings (TRADING_AI_CORS_ORIGINS, default is
+    # local-dev only — ADR-0002 §13: production CORS policy is a
+    # separate deployment decision, not fixed by this code). Never
+    # "*"; no credentials (cookies/auth headers), which this API does
+    # not use.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.cors_origins),
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
     )
     app.include_router(health_router)
     app.include_router(ready_router)

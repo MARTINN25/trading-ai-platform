@@ -38,3 +38,6 @@ npm-debug.log*
 # Environment files (backend/frontend specific, in addition to root .env*)
 .env.local
 .env.*.local
+
+frontend/AGENTS.md
+frontend/CLAUDE.md

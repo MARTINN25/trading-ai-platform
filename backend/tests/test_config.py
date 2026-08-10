@@ -51,3 +51,49 @@ def test_get_required_database_url_returns_value_when_set(
     url = get_required_database_url()
 
     assert url == "postgresql+asyncpg://someuser:somepassword@db-host:5432/trading_ai"
+
+
+def test_settings_default_cors_origins_is_local_dev_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TRADING_AI_CORS_ORIGINS", raising=False)
+
+    settings = get_settings()
+
+    assert settings.cors_origins == ("http://localhost:3000", "http://127.0.0.1:3000")
+
+
+def test_settings_cors_origins_can_be_overridden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "TRADING_AI_CORS_ORIGINS", "https://app.example.com,https://admin.example.com"
+    )
+
+    settings = get_settings()
+
+    assert settings.cors_origins == (
+        "https://app.example.com",
+        "https://admin.example.com",
+    )
+
+
+def test_settings_cors_origins_are_trimmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "TRADING_AI_CORS_ORIGINS", "  https://app.example.com ,  https://admin.example.com  "
+    )
+
+    settings = get_settings()
+
+    assert settings.cors_origins == (
+        "https://app.example.com",
+        "https://admin.example.com",
+    )
+
+
+def test_settings_cors_origins_drop_empty_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRADING_AI_CORS_ORIGINS", "https://app.example.com,,  ,")
+
+    settings = get_settings()
+
+    assert settings.cors_origins == ("https://app.example.com",)
