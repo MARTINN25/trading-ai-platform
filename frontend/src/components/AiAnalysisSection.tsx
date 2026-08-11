@@ -6,8 +6,8 @@ import {
   saveInsight,
   InstrumentApiError,
   type InstrumentAiAnalysis,
-  type InstrumentConfidenceLevel,
 } from "@/lib/instrument-api";
+import InsightSections, { ModeToggle, type InsightViewMode } from "@/components/InsightSections";
 
 type AnalysisState =
   | { status: "idle" }
@@ -41,12 +41,6 @@ function formatGeneratedAt(value: string): string {
 const FIXED_DISCLAIMER =
   "AI-анализ носит информационный характер и не является инвестиционной рекомендацией.";
 
-const CONFIDENCE_LABELS: Record<InstrumentConfidenceLevel, string> = {
-  high: "Высокая",
-  medium: "Средняя",
-  low: "Низкая",
-};
-
 export default function AiAnalysisSection({
   ticker,
   onInsightSaved,
@@ -63,10 +57,16 @@ export default function AiAnalysisSection({
   // never on page load, F5, chart-period switch, or news load).
   const [state, setState] = useState<AnalysisState>({ status: "idle" });
   const [saveState, setSaveState] = useState<SaveState>({ status: "idle" });
+  // FR-021/022 — presentation-only, local UI state (`ADR-0003` §23),
+  // no network request on change (task scope §8/§16). Product Owner
+  // decision: default "Кратко"; resets to default on a fresh
+  // generation, same as `saveState` above.
+  const [mode, setMode] = useState<InsightViewMode>("short");
 
   function generate(): void {
     setState({ status: "loading" });
     setSaveState({ status: "idle" });
+    setMode("short");
     generateInstrumentAnalysis(ticker)
       .then((data) => setState({ status: "loaded", data }))
       .catch((error: unknown) => {
@@ -128,78 +128,12 @@ export default function AiAnalysisSection({
 
         {state.status === "loaded" && (
           <div className="ai-analysis-result">
-            <div className="ai-analysis-block">
-              <h3>Краткий вывод</h3>
-              {/* Plain text children only — React escapes automatically.
-                  Never dangerouslySetInnerHTML, never a Markdown-to-HTML
-                  renderer (task scope §17). */}
-              <p>{state.data.summary}</p>
-            </div>
+            <ModeToggle mode={mode} onChange={setMode} />
 
-            <div className="ai-analysis-block">
-              <h3>Ключевые факты</h3>
-              <ul className="ai-analysis-key-facts">
-                {state.data.key_facts.map((fact, index) => (
-                  <li key={index}>
-                    <span className="ai-analysis-key-fact-text">{fact.fact}</span>
-                    <span className="ai-analysis-key-fact-source">{fact.source}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="ai-analysis-block">
-              <h3>Анализ</h3>
-              <p>{state.data.price_context}</p>
-              <p>{state.data.news_context}</p>
-            </div>
-
-            <div className="ai-analysis-block">
-              <h3>Инсайт / гипотеза</h3>
-              <p>{state.data.insight_hypothesis}</p>
-            </div>
-
-            <div className="ai-analysis-block">
-              <h3>Уровень уверенности</h3>
-              <p className="ai-analysis-confidence">
-                <span className={`ai-analysis-confidence-badge ai-analysis-confidence-${state.data.confidence}`}>
-                  {CONFIDENCE_LABELS[state.data.confidence]}
-                </span>
-              </p>
-              <p>{state.data.confidence_reason}</p>
-            </div>
-
-            <div className="ai-analysis-block">
-              <h3>Что можно рассмотреть</h3>
-              <ul>
-                {state.data.considerations.map((item, index) => (
-                  <li key={index}>{item}</li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="ai-analysis-block">
-              <h3>Риски</h3>
-              <ul className="ai-analysis-risks">
-                {state.data.risks.map((risk, index) => (
-                  <li key={index}>{risk}</li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="ai-analysis-block">
-              <h3>Что сильнее всего повлияло на вывод</h3>
-              <ul>
-                {state.data.key_drivers.map((driver, index) => (
-                  <li key={index}>{driver}</li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="ai-analysis-block">
-              <h3>Актуальность данных</h3>
-              <p>{state.data.data_freshness}</p>
-            </div>
+            {/* Plain text children only throughout — React escapes
+                automatically. Never dangerouslySetInnerHTML, never a
+                Markdown-to-HTML renderer (task scope §17). */}
+            <InsightSections data={state.data} mode={mode} />
 
             <p className="ai-analysis-meta">
               Сгенерировано: {formatGeneratedAt(state.data.generated_at)} · Источник анализа: AI
