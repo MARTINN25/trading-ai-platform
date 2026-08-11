@@ -71,15 +71,85 @@ export interface InstrumentNewsResponse {
   items: InstrumentNewsItem[];
 }
 
+/** FR-011/FR-018 §2 — one fact plus a plain-language source label (not
+ * a full per-fact provenance record, see backend `ai/types.py`'s
+ * `KeyFact` docstring for why). */
+export interface InstrumentKeyFact {
+  fact: string;
+  source: string;
+}
+
+/** FR-019 — a documented categorical level, never a fabricated numeric
+ * score (e.g. "83.7%"). */
+export type InstrumentConfidenceLevel = "high" | "medium" | "low";
+
+/**
+ * FR-018's 10 mandatory insight sections (see backend `ai/types.py`'s
+ * `InstrumentAnalysis` docstring for the exact section mapping).
+ * `analysis_token` is the *only* thing that may be sent back to
+ * `saveInsight` — this client never re-sends analysis content itself
+ * (backend task scope §12: the save endpoint never trusts client-
+ * supplied provenance).
+ */
 export interface InstrumentAiAnalysis {
   ticker: string;
   generated_at: string;
   summary: string;
   price_context: string;
   news_context: string;
+  key_facts: InstrumentKeyFact[];
+  insight_hypothesis: string;
+  confidence: InstrumentConfidenceLevel;
+  confidence_reason: string;
+  considerations: string[];
   risks: string[];
+  key_drivers: string[];
+  data_freshness: string;
   disclaimer: string;
   source: string;
+  analysis_token: string;
+}
+
+/** Compact history-list item — full content is fetched on demand via
+ * `getInsightDetail`, not embedded here (task scope §14). */
+export interface InsightSummary {
+  id: number;
+  ticker: string;
+  generated_at: string;
+  created_at: string;
+  confidence: InstrumentConfidenceLevel;
+  summary: string;
+}
+
+export interface InstrumentInsightsResponse {
+  ticker: string;
+  /** Newest-first, bounded — never infinite-scroll pagination. */
+  items: InsightSummary[];
+}
+
+/** Full persisted insight — returned by both `saveInsight` and
+ * `getInsightDetail`. */
+export interface InsightDetail {
+  id: number;
+  ticker: string;
+  generated_at: string;
+  created_at: string;
+  summary: string;
+  price_context: string;
+  news_context: string;
+  key_facts: InstrumentKeyFact[];
+  insight_hypothesis: string;
+  confidence: InstrumentConfidenceLevel;
+  confidence_reason: string;
+  considerations: string[];
+  risks: string[];
+  key_drivers: string[];
+  data_freshness: string;
+  disclaimer: string;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  schema_version: string;
 }
 
 export interface InstrumentSearchResult {
@@ -427,6 +497,26 @@ export async function getInstrumentNews(ticker: string): Promise<InstrumentNewsR
   return data;
 }
 
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isInstrumentConfidenceLevel(value: unknown): value is InstrumentConfidenceLevel {
+  return value === "high" || value === "medium" || value === "low";
+}
+
+function isInstrumentKeyFact(value: unknown): value is InstrumentKeyFact {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.fact === "string" && typeof candidate.source === "string";
+}
+
+function isInstrumentKeyFactArray(value: unknown): value is InstrumentKeyFact[] {
+  return Array.isArray(value) && value.every(isInstrumentKeyFact);
+}
+
 function isInstrumentAiAnalysis(value: unknown): value is InstrumentAiAnalysis {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -438,10 +528,73 @@ function isInstrumentAiAnalysis(value: unknown): value is InstrumentAiAnalysis {
     typeof candidate.summary === "string" &&
     typeof candidate.price_context === "string" &&
     typeof candidate.news_context === "string" &&
-    Array.isArray(candidate.risks) &&
-    candidate.risks.every((risk) => typeof risk === "string") &&
+    isInstrumentKeyFactArray(candidate.key_facts) &&
+    typeof candidate.insight_hypothesis === "string" &&
+    isInstrumentConfidenceLevel(candidate.confidence) &&
+    typeof candidate.confidence_reason === "string" &&
+    isStringArray(candidate.considerations) &&
+    isStringArray(candidate.risks) &&
+    isStringArray(candidate.key_drivers) &&
+    typeof candidate.data_freshness === "string" &&
     typeof candidate.disclaimer === "string" &&
-    typeof candidate.source === "string"
+    typeof candidate.source === "string" &&
+    typeof candidate.analysis_token === "string"
+  );
+}
+
+function isInsightSummary(value: unknown): value is InsightSummary {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === "number" &&
+    typeof candidate.ticker === "string" &&
+    typeof candidate.generated_at === "string" &&
+    typeof candidate.created_at === "string" &&
+    isInstrumentConfidenceLevel(candidate.confidence) &&
+    typeof candidate.summary === "string"
+  );
+}
+
+function isInstrumentInsightsResponse(value: unknown): value is InstrumentInsightsResponse {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.ticker === "string" &&
+    Array.isArray(candidate.items) &&
+    candidate.items.every(isInsightSummary)
+  );
+}
+
+function isInsightDetail(value: unknown): value is InsightDetail {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === "number" &&
+    typeof candidate.ticker === "string" &&
+    typeof candidate.generated_at === "string" &&
+    typeof candidate.created_at === "string" &&
+    typeof candidate.summary === "string" &&
+    typeof candidate.price_context === "string" &&
+    typeof candidate.news_context === "string" &&
+    isInstrumentKeyFactArray(candidate.key_facts) &&
+    typeof candidate.insight_hypothesis === "string" &&
+    isInstrumentConfidenceLevel(candidate.confidence) &&
+    typeof candidate.confidence_reason === "string" &&
+    isStringArray(candidate.considerations) &&
+    isStringArray(candidate.risks) &&
+    isStringArray(candidate.key_drivers) &&
+    typeof candidate.data_freshness === "string" &&
+    typeof candidate.disclaimer === "string" &&
+    typeof candidate.provider === "string" &&
+    typeof candidate.model === "string" &&
+    typeof candidate.prompt_version === "string" &&
+    typeof candidate.schema_version === "string"
   );
 }
 
@@ -617,6 +770,188 @@ export async function searchInstruments(
   }
 
   if (!isInstrumentSearchResponse(data)) {
+    throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
+  }
+  return data;
+}
+
+/**
+ * Persists the analysis identified by `analysisToken` (from a prior
+ * `generateInstrumentAnalysis` call) — never sends analysis content
+ * itself. Only ever called from an explicit "Сохранить инсайт" click
+ * (Product Owner decision: explicit save, not auto-save).
+ */
+export async function saveInsight(ticker: string, analysisToken: string): Promise<InsightDetail> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/instruments/${encodeURIComponent(ticker)}/insights`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ analysis_token: analysisToken }),
+    });
+  } catch {
+    throw new InstrumentApiError(
+      "network",
+      "Не удалось соединиться с сервером. Проверьте, что backend запущен, и повторите попытку."
+    );
+  }
+
+  if (response.status === 422) {
+    throw new InstrumentApiError(
+      "invalid",
+      "Некорректный тикер.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 404) {
+    throw new InstrumentApiError(
+      "not-found",
+      "Не удалось сохранить: этот AI-анализ уже неактуален (истёк или уже сохранён). Сгенерируйте анализ заново.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 503) {
+    throw new InstrumentApiError(
+      "unavailable",
+      "Сохранение сейчас недоступно. Попробуйте ещё раз позже.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (!response.ok) {
+    const backendDetail = await readBackendDetail(response);
+    throw new InstrumentApiError(
+      "unexpected",
+      "Не удалось сохранить инсайт. Попробуйте ещё раз.",
+      backendDetail
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new InstrumentApiError("unexpected", "Backend вернул некорректный ответ.");
+  }
+
+  if (!isInsightDetail(data)) {
+    throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
+  }
+  return data;
+}
+
+/**
+ * Newest-first, bounded history (task scope §14) — loads on mount (see
+ * `InsightHistorySection.tsx`) and again only via an explicit
+ * "Повторить"/reload action, never polled.
+ */
+export async function getInstrumentInsights(ticker: string): Promise<InstrumentInsightsResponse> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/instruments/${encodeURIComponent(ticker)}/insights`, {
+      method: "GET",
+      cache: "no-store",
+    });
+  } catch {
+    throw new InstrumentApiError(
+      "network",
+      "Не удалось соединиться с сервером. Проверьте, что backend запущен, и повторите попытку."
+    );
+  }
+
+  if (response.status === 422) {
+    throw new InstrumentApiError(
+      "invalid",
+      "Некорректный тикер.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 503) {
+    throw new InstrumentApiError(
+      "unavailable",
+      "История AI-анализов сейчас недоступна.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (!response.ok) {
+    const backendDetail = await readBackendDetail(response);
+    throw new InstrumentApiError(
+      "unexpected",
+      "Не удалось загрузить историю AI-анализов. Попробуйте ещё раз.",
+      backendDetail
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new InstrumentApiError("unexpected", "Backend вернул некорректный ответ.");
+  }
+
+  if (!isInstrumentInsightsResponse(data)) {
+    throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
+  }
+  return data;
+}
+
+/**
+ * Fetches one full persisted insight on demand — called only when the
+ * user expands a history item (task scope §14: list stays compact,
+ * detail is lazy).
+ */
+export async function getInsightDetail(insightId: number): Promise<InsightDetail> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/insights/${encodeURIComponent(String(insightId))}`, {
+      method: "GET",
+      cache: "no-store",
+    });
+  } catch {
+    throw new InstrumentApiError(
+      "network",
+      "Не удалось соединиться с сервером. Проверьте, что backend запущен, и повторите попытку."
+    );
+  }
+
+  if (response.status === 404) {
+    throw new InstrumentApiError(
+      "not-found",
+      "Инсайт не найден.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 503) {
+    throw new InstrumentApiError(
+      "unavailable",
+      "Инсайт сейчас недоступен.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (!response.ok) {
+    const backendDetail = await readBackendDetail(response);
+    throw new InstrumentApiError(
+      "unexpected",
+      "Не удалось загрузить инсайт. Попробуйте ещё раз.",
+      backendDetail
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new InstrumentApiError("unexpected", "Backend вернул некорректный ответ.");
+  }
+
+  if (!isInsightDetail(data)) {
     throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
   }
   return data;

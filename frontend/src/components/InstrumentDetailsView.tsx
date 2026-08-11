@@ -10,6 +10,7 @@ import {
 import PriceChartSection from "@/components/PriceChartSection";
 import InstrumentNewsSection from "@/components/InstrumentNewsSection";
 import AiAnalysisSection from "@/components/AiAnalysisSection";
+import InsightHistorySection from "@/components/InsightHistorySection";
 
 type ViewState =
   | { status: "loading" }
@@ -89,6 +90,11 @@ function formatSource(source: string): string {
 
 export default function InstrumentDetailsView({ ticker }: { ticker: string }) {
   const [state, setState] = useState<ViewState>({ status: "loading" });
+  // Bumped by `AiAnalysisSection` right after a successful save — the
+  // one explicit bridge between the two otherwise-independent AI
+  // sections, so the history list reloads without becoming a shared
+  // page-level state (task scope §14-§16).
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
 
   const load = useCallback(() => {
     setState({ status: "loading" });
@@ -143,7 +149,15 @@ export default function InstrumentDetailsView({ ticker }: { ticker: string }) {
           entirely user-click-driven (never auto-triggered) and its own
           state never hides an already-loaded summary/chart/news, nor
           vice versa (task scope §9, §11). */}
-      <AiAnalysisSection ticker={ticker} />
+      <AiAnalysisSection
+        ticker={ticker}
+        onInsightSaved={() => setHistoryRefreshKey((key) => key + 1)}
+      />
+
+      {/* Independent loading/error/empty state, same as the sections
+          above — only reloads on mount or right after a save via
+          `historyRefreshKey`, never polled (task scope §14). */}
+      <InsightHistorySection ticker={ticker} refreshKey={historyRefreshKey} />
 
       <p className="instrument-disclaimer">
         Рыночные данные — только для просмотра и могут запаздывать; это не торговое исполнение и

@@ -16,8 +16,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from trading_ai.ai.gateway import XAIGateway
+from trading_ai.ai.pending_cache import PendingAnalysisCache
 from trading_ai.api.routes.health import router as health_router
 from trading_ai.api.routes.instruments import register_ai_analysis_exception_handlers
+from trading_ai.api.routes.instruments import register_insight_exception_handlers
 from trading_ai.api.routes.instruments import register_instruments_exception_handlers
 from trading_ai.api.routes.instruments import router as instruments_router
 from trading_ai.api.routes.ready import router as ready_router
@@ -92,6 +94,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("TRADING_AI_LLM_API_KEY is not set; AI analysis is disabled.")
         app.state.ai_gateway = None
 
+    # Unconditional, unlike the three gateways above: plain in-process
+    # memory (`ai/pending_cache.py`), not an external secret-gated
+    # provider — always available regardless of which API keys are set.
+    app.state.pending_analysis_cache = PendingAnalysisCache()
+
     try:
         yield
     finally:
@@ -127,6 +134,7 @@ def create_app() -> FastAPI:
     register_watchlist_exception_handlers(app)
     register_instruments_exception_handlers(app)
     register_ai_analysis_exception_handlers(app)
+    register_insight_exception_handlers(app)
     return app
 
 
