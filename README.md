@@ -421,6 +421,32 @@ PUT /insights/{id}/outcome      {"outcome_note": "Цена выросла на 3
 
 Observability: `operation=evaluate_insight insight_id rating status latency_ms` и `operation=record_insight_outcome insight_id status latency_ms` — свободный текст `outcome_note` никогда не логируется целиком.
 
+#### Trade Journal
+
+Реализует FR-030 («Пользователь может вручную зафиксировать сделку (инструмент, направление, результат) в дневнике») и UJ-017 (создание записи, опционально со ссылкой на ранее сформированный инсайт). Модуль `backend/src/trading_ai/journal/` (MODULE_BOUNDARIES.md §13) — **не** брокерская/order/portfolio-подсистема: намеренно нет entry/exit price, quantity, commission, leverage, stop-loss/take-profit, order id, execution venue или realized P&L, поскольку FR-030 их не требует.
+
+**Product Owner decisions (через AskUserQuestion):**
+- **Mutability — editable, no delete**: запись можно скорректировать после создания (`updated_at` фиксирует факт правки), но endpoint/UI удаления в этом срезе нет и soft-delete не вводится — ошибка исправляется редактированием, а не удалением из истории;
+- **Формат результата — категориальный статус + опциональный текст**: `TradeResultStatus` — стабильный enum из 4 значений (`profit`/`loss`/`breakeven`/`open`; `open` — сделка ещё не закрыта, что осмысленно именно благодаря editable-семантике: статус потом обновляется) плюс опциональный `result_note` (до 2000 символов) — никогда числовое поле P&L, которое FR-030 не требует;
+- **Формат направления — категориальный enum**: `TradeDirection` (`long`/`short`), не свободный текст.
+
+**Связь с insight — без исключений из общего правила.** `journal` зависит от `insights` только для проверки существования `insight_id` (MODULE_BOUNDARIES.md §13: «insights — только для ссылки»), никогда не читает и не пишет содержимое/provenance инсайта. FK `journal_entries.insight_id → insights.id` без `ON DELETE CASCADE` — удаление инсайтов в проекте не реализовано вообще, поэтому cascade-семантика не придумывается заранее.
+
+```
+POST /journal            {"ticker": "...", "direction": "long", "result_status": "open", "result_note": null, "insight_id": null}
+GET  /journal             → { "items": [...] }  # newest-first, без per-ticker фильтра — единый глобальный список (UJ-017: «Дневник сделок» как отдельный раздел)
+GET  /journal/{id}
+PUT  /journal/{id}        # full-replace edit — пересылаются все journal-owned поля
+```
+
+Нет `DELETE /journal/{id}` — по Product Owner decision. Ошибки: `404` — запись или связанный инсайт не найдены; `422` — некорректный `ticker`/`direction`/`result_status`, слишком длинный `result_note`, посторонние поля в теле (`extra="forbid"` — frontend не может передать содержимое/provenance инсайта или брокерские поля типа `entry_price`/`quantity`/`broker`); `503` — БД недоступна, без деталей SQL.
+
+**Схема БД** (`journal_entries`, миграция `0005_journal_entries`, ревизует `0004_insight_evaluations`): `id`, `ticker`, `direction`, `result_status` — обычные реляционные колонки (не JSONB: каждое поле — маленький, фиксированный, индивидуально queryable факт, а не вариативный список); `result_note` (nullable), `insight_id` (nullable `FK insights.id`), `created_at`, `updated_at` (nullable — `NULL`, пока запись не редактировалась).
+
+Frontend: минимальная точка входа — ссылка «Дневник сделок» на главной странице (без полноценной market-навигации — FR-003 остаётся отдельным будущим срезом); отдельный маршрут `/journal`; форма создания/редактирования (тикер, направление, результат, опциональный комментарий); из истории AI-анализов инструмента (`InsightHistorySection`) — ссылка «Добавить в дневник», открывающая `/journal` с предзаполненными `ticker`/`insight_id` через query-параметры (сам инсайт-контент через URL не передаётся — backend перепроверяет `insight_id` заново).
+
+Observability: `operation=create_journal_entry journal_entry_id ticker status latency_ms` и `operation=update_journal_entry journal_entry_id ticker status latency_ms` — свободный текст `result_note` никогда не логируется целиком.
+
 #### AI quality evaluation
 
 Первый, намеренно небольшой evaluation harness для `GenerateInstrumentAnalysis` (ADR-0007 §52 — evaluation dataset нужен до дальнейшего расширения production-использования модели). **Не пользовательская фича** — frontend её не вызывает и не знает о ней; это dev/CI-инструмент, аналог regression-теста для качества AI-ответа. Не финальная система оценки — baseline, который будет расширяться по мере роста продукта.
