@@ -152,6 +152,30 @@ export interface InsightDetail {
   schema_version: string;
 }
 
+/**
+ * FR-035 — Product Owner decision: categorical 3-way, not binary, not
+ * numeric (a small numeric scale was rejected as implying a precision
+ * no single glance at a saved insight can support, same reasoning
+ * `InstrumentConfidenceLevel` used for confidence).
+ */
+export type InsightRating = "useful" | "partially_useful" | "not_useful";
+
+/**
+ * The evaluation/outcome record for one saved insight
+ * (`trading_ai.evaluations` — **not** the developer AI quality harness).
+ * One record per insight; either half may be `null` until the user acts
+ * on it (FR-035 rating, FR-036/038 manual outcome).
+ */
+export interface InsightEvaluation {
+  insight_id: number;
+  rating: InsightRating | null;
+  rated_at: string | null;
+  outcome_note: string | null;
+  outcome_recorded_at: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
 export interface InstrumentSearchResult {
   ticker: string;
   name: string;
@@ -669,6 +693,30 @@ export async function generateInstrumentAnalysis(ticker: string): Promise<Instru
   return data;
 }
 
+function isInsightRating(value: unknown): value is InsightRating {
+  return value === "useful" || value === "partially_useful" || value === "not_useful";
+}
+
+function isNullableInsightRating(value: unknown): value is InsightRating | null {
+  return value === null || isInsightRating(value);
+}
+
+function isInsightEvaluation(value: unknown): value is InsightEvaluation {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.insight_id === "number" &&
+    isNullableInsightRating(candidate.rating) &&
+    isNullableString(candidate.rated_at) &&
+    isNullableString(candidate.outcome_note) &&
+    isNullableString(candidate.outcome_recorded_at) &&
+    typeof candidate.created_at === "string" &&
+    isNullableString(candidate.updated_at)
+  );
+}
+
 function isInstrumentSearchResult(value: unknown): value is InstrumentSearchResult {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -895,6 +943,190 @@ export async function getInstrumentInsights(ticker: string): Promise<InstrumentI
   }
 
   if (!isInstrumentInsightsResponse(data)) {
+    throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
+  }
+  return data;
+}
+
+/**
+ * Sets (or replaces — UJ-014 explicitly allows changing a previous
+ * rating) the user's evaluation of a saved insight. `PUT`, not `POST`:
+ * calling this twice with a different value simply replaces it, never
+ * creates a duplicate.
+ */
+export async function evaluateInsight(
+  insightId: number,
+  rating: InsightRating
+): Promise<InsightEvaluation> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/insights/${encodeURIComponent(String(insightId))}/evaluation`, {
+      method: "PUT",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rating }),
+    });
+  } catch {
+    throw new InstrumentApiError(
+      "network",
+      "Не удалось соединиться с сервером. Проверьте, что backend запущен, и повторите попытку."
+    );
+  }
+
+  if (response.status === 422) {
+    throw new InstrumentApiError("invalid", "Некорректная оценка.", await readBackendDetail(response));
+  }
+
+  if (response.status === 404) {
+    throw new InstrumentApiError("not-found", "Инсайт не найден.", await readBackendDetail(response));
+  }
+
+  if (response.status === 503) {
+    throw new InstrumentApiError(
+      "unavailable",
+      "Оценка сейчас недоступна. Попробуйте ещё раз позже.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (!response.ok) {
+    const backendDetail = await readBackendDetail(response);
+    throw new InstrumentApiError(
+      "unexpected",
+      "Не удалось сохранить оценку. Попробуйте ещё раз.",
+      backendDetail
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new InstrumentApiError("unexpected", "Backend вернул некорректный ответ.");
+  }
+
+  if (!isInsightEvaluation(data)) {
+    throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
+  }
+  return data;
+}
+
+/**
+ * Fetches the evaluation/outcome record for an insight, if any. `404`
+ * ("not-found") covers both "insight doesn't exist" and "insight exists
+ * but was never evaluated" — the caller (`InsightHistorySection.tsx`)
+ * treats both as "not yet evaluated" for display purposes.
+ */
+export async function getInsightEvaluation(insightId: number): Promise<InsightEvaluation> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/insights/${encodeURIComponent(String(insightId))}/evaluation`, {
+      method: "GET",
+      cache: "no-store",
+    });
+  } catch {
+    throw new InstrumentApiError(
+      "network",
+      "Не удалось соединиться с сервером. Проверьте, что backend запущен, и повторите попытку."
+    );
+  }
+
+  if (response.status === 404) {
+    throw new InstrumentApiError("not-found", "Оценка не найдена.", await readBackendDetail(response));
+  }
+
+  if (response.status === 503) {
+    throw new InstrumentApiError(
+      "unavailable",
+      "Оценка сейчас недоступна.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (!response.ok) {
+    const backendDetail = await readBackendDetail(response);
+    throw new InstrumentApiError(
+      "unexpected",
+      "Не удалось загрузить оценку. Попробуйте ещё раз.",
+      backendDetail
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new InstrumentApiError("unexpected", "Backend вернул некорректный ответ.");
+  }
+
+  if (!isInsightEvaluation(data)) {
+    throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
+  }
+  return data;
+}
+
+/**
+ * Records (or replaces) the manual outcome note for a saved insight
+ * (FR-036/FR-038) — independent of whether a rating exists yet. Not a
+ * Trade Journal: only a short free-text description, never entry/exit
+ * price, quantity, side, or P&L (task scope §18).
+ */
+export async function recordInsightOutcome(
+  insightId: number,
+  outcomeNote: string
+): Promise<InsightEvaluation> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/insights/${encodeURIComponent(String(insightId))}/outcome`, {
+      method: "PUT",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ outcome_note: outcomeNote }),
+    });
+  } catch {
+    throw new InstrumentApiError(
+      "network",
+      "Не удалось соединиться с сервером. Проверьте, что backend запущен, и повторите попытку."
+    );
+  }
+
+  if (response.status === 422) {
+    throw new InstrumentApiError(
+      "invalid",
+      "Некорректный результат — заполните поле.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 404) {
+    throw new InstrumentApiError("not-found", "Инсайт не найден.", await readBackendDetail(response));
+  }
+
+  if (response.status === 503) {
+    throw new InstrumentApiError(
+      "unavailable",
+      "Фиксация результата сейчас недоступна. Попробуйте ещё раз позже.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (!response.ok) {
+    const backendDetail = await readBackendDetail(response);
+    throw new InstrumentApiError(
+      "unexpected",
+      "Не удалось зафиксировать результат. Попробуйте ещё раз.",
+      backendDetail
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new InstrumentApiError("unexpected", "Backend вернул некорректный ответ.");
+  }
+
+  if (!isInsightEvaluation(data)) {
     throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
   }
   return data;

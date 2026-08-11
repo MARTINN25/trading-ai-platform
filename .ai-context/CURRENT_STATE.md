@@ -53,6 +53,22 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
+Insight Evaluation & Outcome Tracking Vertical Slice (ветка `feat/insight-evaluation`) — закрывает последний шаг канонического MVP-сценария (`PRODUCT_SCOPE.md` §21: «...сформировать инсайт → увидеть источники → сохранить → **оценить**»): FR-035 (пользовательская оценка сохранённого инсайта), FR-036/FR-038 (ручная фиксация результата, неразрывно связанная с исходным инсайтом).
+
+- **Product Owner decision (через AskUserQuestion, не решено самостоятельно)**: формат оценки — **категориальный 3-way** («Полезен» / «Частично полезен» / «Не полезен»), не binary, не числовая шкала; FR-035/UJ-014 требовали оценку, но не фиксировали формат;
+- Новый модуль `backend/src/trading_ai/evaluations/` (MODULE_BOUNDARIES.md §12) — **не путать** с `ai/evaluation/` (developer AI quality harness, без пользователя и HTTP); зависит от `insights` только для ссылки на id, никогда не читает/пишет содержимое инсайта;
+- Одна запись `InsightEvaluation` на инсайт (`UNIQUE` FK-constraint на `insight_id`), обе половины — рейтинг и manual outcome — независимы и upsert (`PUT`, UJ-014 явно разрешает менять оценку; то же расширено на outcome для консистентности);
+- Insight остаётся immutable — `evaluations` не имеет пути изменить его; FK без `ON DELETE CASCADE` (delete инсайтов в проекте пока не существует вообще, cascade-семантика не придумана заранее);
+- Новая таблица `insight_evaluations` (миграция `0004_insight_evaluations`, ревизует `0003_insights`), реально прогнан upgrade→downgrade→upgrade→current цикл против Compose PostgreSQL, FK-integrity подтверждена вживую (`IntegrityError` на несуществующий `insight_id`);
+- `EvaluationRepository`/`EvaluateInsight`/`RecordInsightOutcome`/`GetInsightEvaluation` — новые минимальные компоненты; `PUT/GET /insights/{id}/evaluation`, `PUT /insights/{id}/outcome`, оба DTO — `extra="forbid"` (frontend не может подделать содержимое/provenance инсайта);
+- **FR-037 (изменение цены) осознанно отложен**: `evaluations` не может зависеть от `market_data` (MODULE_BOUNDARIES.md §12 не включает эту зависимость), а у `insights` нет сохранённого числового price-снапшота на момент генерации — только prose `price_context`; SHOULD, не MUST — задокументировано, не замаскировано;
+- Frontend: внутри `InsightHistorySection` — «Оценка инсайта» (3 кнопки) и «Результат» (текстовое поле + фиксация) в развёрнутой карточке; `404` от `GET .../evaluation` («ещё не оценивался») рендерится как нормальное состояние, не как ошибка;
+- Не добавлено: FR-039 auto outcome tracking, scheduled checking, классификация ошибок, «уроки», Trade Journal (entry/exit price, quantity, side, P&L), Notes, portfolio, auth, alerts, Redis, worker, WebSocket, новый LLM, RAG, agents.
+
+Реально проверено: `pytest -v` → 344 passed, 23 skipped (без регрессий, было 309/18); `mypy src tests` → чисто (85 файлов); `alembic current` → `0004_insight_evaluations (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл + FK-constraint подтверждены; AI-файлы не менялись — offline/live evaluation не запускались повторно (не требовалось, обосновано); полная real-browser верификация (generate → save → history → evaluate → F5 → оценка сохранилась → outcome → F5 → результат сохранился → provenance/содержимое исходного инсайта не изменились → вторая независимая запись без унаследованной оценки/результата → watchlist/chart/news/search продолжают работать), включая honest recovery от двух реальных Twelve Data rate-limit окон; тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
+
+## 4a. Предыдущая ревью-задача (теперь завершена)
+
 Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insight-persistence`) — доводит существующий Instrument AI Analysis до обязательных MVP-требований: FR-018 (10 обязательных секций insight), FR-019 (явный категориальный confidence), FR-034 (persistence + история инсайтов), FR-011 (минимальный source attribution ключевых фактов), ADR-0004/ADR-0007 provenance requirements.
 
 - **Product Owner decision (через AskUserQuestion, не решено самостоятельно)**: сохранение инсайта — **explicit**, кнопка «Сохранить инсайт» (не auto-save); `docs/product/USER_JOURNEYS.md` UJ-013 явно оставляла этот выбор нерешённым;
@@ -67,7 +83,7 @@ Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insi
 
 Реально проверено: `pytest -v` → 309 passed, 18 skipped (без регрессий); `mypy src tests` → чисто (72 файла); `alembic current` → `0003_insights (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл подтверждён, `watchlist_items` не тронута; offline evaluation → 12/12, 0 violations; live evaluation (opt-in) → 3/3, 0 violations; полная real-browser верификация (generate → структура/confidence → save → F5 → история сохраняется → detail с provenance → вторая генерация/сохранение → newest-first → chart/news/search/watchlist продолжают работать), тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4a. Предыдущая ревью-задача (теперь завершена)
+## 4b. Ревью-задача до предыдущей (тоже завершена)
 
 AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) — первый, намеренно небольшой, воспроизводимый evaluation harness для уже существующего `GenerateInstrumentAnalysis` (ADR-0007 §52 явно требует evaluation dataset до дальнейшего расширения production-использования модели). **Не пользовательская фича** — frontend не менялся вообще, ничего не выполняется в браузере, ничего не вызывает market/news provider:
 
@@ -150,15 +166,15 @@ AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) �
 
 ## 7. Последняя завершённая задача
 
-AI Quality Evaluation Vertical Slice — завершён.
+Insight Persistence & Structure Completion Vertical Slice — завершён.
 
 ## 8. Текущая задача
 
-Insight Persistence & Structure Completion Vertical Slice — на ревью.
+Insight Evaluation & Outcome Tracking Vertical Slice — на ревью.
 
 ## 9. Следующий планируемый блок
 
-Вероятно insight evaluation / journal / market navigation — только согласно roadmap после merge Insight Persistence & Structure Completion Vertical Slice; не предопределено этой записью, MVP в целом не считается завершённым.
+Следующий продуктовый vertical slice определяется по roadmap/FUNCTIONAL_REQUIREMENTS.md после ревью Insight Evaluation & Outcome Tracking Vertical Slice — вероятные кандидаты (не предрешено этой записью): Trade Journal (FR-030), Personal Notes (FR-032), базовая навигация по рыночным разделам (FR-003/004). MVP в целом не считается завершённым.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 
