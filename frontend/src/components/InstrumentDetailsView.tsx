@@ -88,12 +88,21 @@ function formatSource(source: string): string {
   return SOURCE_DISPLAY_NAMES[source] ?? source;
 }
 
+/**
+ * Instrument Workspace (Phase 1, task scope §7) — reorganizes the same
+ * five data sections (quote/stats, chart, news, AI analysis, history)
+ * into a dense, entity-centric workspace instead of a single narrow
+ * column. `PriceChartSection`/`InstrumentNewsSection`/
+ * `AiAnalysisSection`/`InsightHistorySection` are unchanged internally
+ * — only their composition (grid placement) changes here.
+ */
 export default function InstrumentDetailsView({ ticker }: { ticker: string }) {
   const [state, setState] = useState<ViewState>({ status: "loading" });
   // Bumped by `AiAnalysisSection` right after a successful save — the
   // one explicit bridge between the two otherwise-independent AI
   // sections, so the history list reloads without becoming a shared
-  // page-level state (task scope §14-§16).
+  // page-level state (task scope §14-§16 of the earlier insight-
+  // persistence task).
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
 
   const load = useCallback(() => {
@@ -114,10 +123,18 @@ export default function InstrumentDetailsView({ ticker }: { ticker: string }) {
   }, [load]);
 
   return (
-    <main className="instrument-details">
-      <Link href="/" className="instrument-back-link">
-        ← Назад к watchlist
-      </Link>
+    <main className="instrument-workspace">
+      <nav className="workspace-breadcrumb" aria-label="Навигация по разделу">
+        <Link href="/" className="workspace-breadcrumb-link">
+          Обзор
+        </Link>
+        <span aria-hidden="true">/</span>
+        <Link href="/markets" className="workspace-breadcrumb-link">
+          Рынки
+        </Link>
+        <span aria-hidden="true">/</span>
+        <span className="workspace-breadcrumb-current">{ticker}</span>
+      </nav>
 
       <div aria-live="polite">
         {state.status === "loading" && <p>Загрузка данных по {ticker}…</p>}
@@ -131,33 +148,49 @@ export default function InstrumentDetailsView({ ticker }: { ticker: string }) {
           </div>
         )}
 
-        {state.status === "loaded" && <InstrumentDetailsContent data={state.data} />}
+        {state.status === "loaded" && <InstrumentHeader data={state.data} />}
       </div>
 
-      {/* Independent of the summary's own loading/error state above —
-          a chart failure never hides an already-loaded summary, and a
-          summary failure never blocks the chart (task scope §9/§13). */}
-      <PriceChartSection ticker={ticker} />
+      {/* B/C. Chart gets the wide primary column; stats sit beside it
+          as a compact panel (task scope §7). Independent of the
+          summary's own loading/error state above — a chart failure
+          never hides an already-loaded summary, and vice versa. */}
+      <div className="workspace-primary-row">
+        <section className="workspace-panel workspace-chart-panel" aria-label="График цены">
+          <PriceChartSection ticker={ticker} />
+        </section>
+        <aside className="workspace-panel workspace-stats-panel" aria-label="Рыночная статистика">
+          <h2>Статистика</h2>
+          {state.status === "loaded" ? (
+            <InstrumentStatsPanel data={state.data} />
+          ) : (
+            <p className="text-muted">{state.status === "loading" ? "Загрузка…" : UNAVAILABLE}</p>
+          )}
+        </aside>
+      </div>
 
-      {/* Same independence rule applies to news: summary, chart, and
-          news each own their loading/error state — no shared
-          page-level state, no section's failure hides another's
-          already-loaded data (task scope §9). */}
-      <InstrumentNewsSection ticker={ticker} />
+      {/* D. News + AI analysis side by side — reduces vertical
+          scrolling to reach the AI section (task scope §7). Each
+          section still owns its own independent loading/error state,
+          same rule as before. */}
+      <div className="workspace-intelligence-row">
+        <section className="workspace-panel workspace-news-panel">
+          <InstrumentNewsSection ticker={ticker} />
+        </section>
+        <section className="workspace-panel workspace-ai-panel">
+          <AiAnalysisSection
+            ticker={ticker}
+            onInsightSaved={() => setHistoryRefreshKey((key) => key + 1)}
+          />
+        </section>
+      </div>
 
-      {/* Same independence rule again: AI-analysis generation is
-          entirely user-click-driven (never auto-triggered) and its own
-          state never hides an already-loaded summary/chart/news, nor
-          vice versa (task scope §9, §11). */}
-      <AiAnalysisSection
-        ticker={ticker}
-        onInsightSaved={() => setHistoryRefreshKey((key) => key + 1)}
-      />
-
-      {/* Independent loading/error/empty state, same as the sections
-          above — only reloads on mount or right after a save via
-          `historyRefreshKey`, never polled (task scope §14). */}
-      <InsightHistorySection ticker={ticker} refreshKey={historyRefreshKey} />
+      {/* E. History remains reachable without dominating the initial
+          viewport — a full-width panel below the fold, same
+          independent loading/error/empty state as before. */}
+      <section className="workspace-history-panel">
+        <InsightHistorySection ticker={ticker} refreshKey={historyRefreshKey} />
+      </section>
 
       <p className="instrument-disclaimer">
         Рыночные данные — только для просмотра и могут запаздывать; это не торговое исполнение и
@@ -167,10 +200,35 @@ export default function InstrumentDetailsView({ ticker }: { ticker: string }) {
   );
 }
 
-function InstrumentDetailsContent({ data }: { data: InstrumentDetails }) {
+function InstrumentHeader({ data }: { data: InstrumentDetails }) {
   const price = formatPrice(data.price);
   const change = formatChange(data.change, data.change_percent);
 
+  return (
+    <header className="instrument-header">
+      <h1 className="instrument-ticker">{data.ticker}</h1>
+      <p className="instrument-price">{price ?? UNAVAILABLE}</p>
+      {change ? (
+        <p
+          className={`instrument-change instrument-change-${change.direction}`}
+          aria-label={
+            change.direction === "up" ? "рост" : change.direction === "down" ? "падение" : "без изменений"
+          }
+        >
+          {change.text}
+        </p>
+      ) : (
+        <p className="instrument-change-unavailable">{UNAVAILABLE}</p>
+      )}
+      <div className="instrument-header-meta">
+        <span>Обновлено: {formatAsOf(data.as_of)}</span>
+        <span>Источник: {formatSource(data.source)}</span>
+      </div>
+    </header>
+  );
+}
+
+function InstrumentStatsPanel({ data }: { data: InstrumentDetails }) {
   const stats: Array<{ label: string; value: string | null }> = [
     { label: "Open", value: formatPrice(data.open) },
     { label: "High", value: formatPrice(data.high) },
@@ -180,44 +238,17 @@ function InstrumentDetailsContent({ data }: { data: InstrumentDetails }) {
   ];
 
   return (
-    <>
-      <header className="instrument-header">
-        <h1 className="instrument-ticker">{data.ticker}</h1>
-        <p className="instrument-price">{price ?? UNAVAILABLE}</p>
-        {change ? (
-          <p
-            className={`instrument-change instrument-change-${change.direction}`}
-            aria-label={
-              change.direction === "up"
-                ? "рост"
-                : change.direction === "down"
-                  ? "падение"
-                  : "без изменений"
-            }
-          >
-            {change.text}
-          </p>
-        ) : (
-          <p className="instrument-change-unavailable">{UNAVAILABLE}</p>
-        )}
-      </header>
-
-      <dl className="instrument-stats-grid">
-        {stats.map((stat) => (
-          <div className="instrument-stat" key={stat.label}>
-            <dt className="instrument-stat-label">{stat.label}</dt>
-            <dd className="instrument-stat-value">{stat.value ?? UNAVAILABLE}</dd>
-          </div>
-        ))}
-        <div className="instrument-stat">
-          <dt className="instrument-stat-label">Updated</dt>
-          <dd className="instrument-stat-value">{formatAsOf(data.as_of)}</dd>
+    <dl className="instrument-stats-grid">
+      {stats.map((stat) => (
+        <div className="instrument-stat" key={stat.label}>
+          <dt className="instrument-stat-label">{stat.label}</dt>
+          <dd className="instrument-stat-value">{stat.value ?? UNAVAILABLE}</dd>
         </div>
-        <div className="instrument-stat">
-          <dt className="instrument-stat-label">Source</dt>
-          <dd className="instrument-stat-value">{formatSource(data.source)}</dd>
-        </div>
-      </dl>
-    </>
+      ))}
+      <div className="instrument-stat">
+        <dt className="instrument-stat-label">Source</dt>
+        <dd className="instrument-stat-value">{formatSource(data.source)}</dd>
+      </div>
+    </dl>
   );
 }

@@ -236,7 +236,7 @@ export default function InsightHistorySection({
               return (
                 <li key={item.id} className="insight-history-item">
                   <p className="insight-history-item-meta">
-                    {formatTimestamp(item.created_at)} · Confidence:{" "}
+                    {formatTimestamp(item.created_at)} · Уверенность:{" "}
                     <span
                       className={`insight-history-confidence insight-history-confidence-${item.confidence}`}
                     >

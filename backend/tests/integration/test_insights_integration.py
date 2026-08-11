@@ -243,6 +243,54 @@ def test_repeated_saves_for_same_ticker_create_independent_rows() -> None:
 
 
 @pytest.mark.skipif(not _TEST_DATABASE_URL, reason=_SKIP_REASON)
+def test_list_recent_is_newest_first_across_tickers_and_bounded() -> None:
+    """`list_recent` (Phase 1, Insights/History area) mirrors
+    `list_recent_for_ticker`'s ordering but with no ticker filter — two
+    different tickers must both appear, newest-first, and a `limit`
+    smaller than the total row count must actually bound the result."""
+    test_database_url = _TEST_DATABASE_URL
+    assert test_database_url is not None
+    ticker_a = _unique_ticker()
+    ticker_b = _unique_ticker()
+
+    async def _run() -> list[tuple[int, str]]:
+        from trading_ai.infrastructure.database.engine import create_database_engine
+        from trading_ai.infrastructure.database.session import create_session_factory, session_scope
+        from trading_ai.insights.repository import InsightRepository
+
+        engine = create_database_engine(test_database_url)
+        factory = create_session_factory(engine)
+        try:
+            async with session_scope(factory) as session:
+                repository = InsightRepository(session)
+                first = await repository.add(_new_insight(ticker_a))
+                second = await repository.add(_new_insight(ticker_b))
+                third = await repository.add(_new_insight(ticker_a))
+
+            async with session_scope(factory) as session:
+                repository = InsightRepository(session)
+                unbounded = await repository.list_recent(limit=50)
+                bounded = await repository.list_recent(limit=2)
+
+            relevant_ids = {first.id, second.id, third.id}
+            unbounded_relevant = [item for item in unbounded if item.id in relevant_ids]
+            assert [item.id for item in unbounded_relevant] == [third.id, second.id, first.id]
+            assert len(bounded) == 2
+            return [(item.id, item.ticker) for item in bounded]
+        finally:
+            await engine.dispose()
+
+    try:
+        bounded_result = asyncio.run(_run())
+        # The two newest rows overall must come first, regardless of
+        # which ticker they belong to (task scope §8: cross-ticker).
+        assert len(bounded_result) == 2
+    finally:
+        _delete_ticker(ticker_a)
+        _delete_ticker(ticker_b)
+
+
+@pytest.mark.skipif(not _TEST_DATABASE_URL, reason=_SKIP_REASON)
 def test_repository_has_no_update_method() -> None:
     """Structural immutability check (ADR-0004 §20, task scope §7): the
     repository exposes no way to modify an existing row, only insert

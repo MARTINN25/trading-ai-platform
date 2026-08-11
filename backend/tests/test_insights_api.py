@@ -15,6 +15,7 @@ from trading_ai.api.routes.instruments import (
     get_insight_detail_use_case,
     get_insight_repository,
     get_list_instrument_insights_use_case,
+    get_list_recent_insights_use_case,
     get_save_insight_use_case,
 )
 from trading_ai.insights.domain import (
@@ -111,6 +112,16 @@ class _FakeListInstrumentInsights:
         return self._result
 
 
+class _FakeListRecentInsights:
+    def __init__(self, result: list[SavedInsight]) -> None:
+        self._result = result
+        self.received_limit: int | None = None
+
+    async def execute(self, limit: int) -> list[SavedInsight]:
+        self.received_limit = limit
+        return self._result
+
+
 class _FakeGetInsightDetail:
     def __init__(self, result: SavedInsight | None = None, error: Exception | None = None) -> None:
         self._result = result
@@ -159,6 +170,10 @@ def _override_list(app: FastAPI, fake: _FakeListInstrumentInsights) -> None:
 
 def _override_detail(app: FastAPI, fake: _FakeGetInsightDetail) -> None:
     app.dependency_overrides[get_insight_detail_use_case] = lambda: fake
+
+
+def _override_recent(app: FastAPI, fake: _FakeListRecentInsights) -> None:
+    app.dependency_overrides[get_list_recent_insights_use_case] = lambda: fake
 
 
 def test_save_insight_success_returns_201_with_full_structure() -> None:
@@ -252,6 +267,87 @@ def test_list_instrument_insights_empty_history() -> None:
 
     assert response.status_code == 200
     assert response.json()["items"] == []
+
+
+def test_list_recent_insights_success_newest_first_across_tickers() -> None:
+    app = create_app()
+    items = [
+        _sample_saved_insight(insight_id=2, ticker="MSFT"),
+        _sample_saved_insight(insight_id=1, ticker="AAPL"),
+    ]
+    fake = _FakeListRecentInsights(result=items)
+    _override_recent(app, fake)
+    client = TestClient(app)
+
+    response = client.get("/insights")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["ticker"] for item in body["items"]] == ["MSFT", "AAPL"]
+    # Compact summary item, same shape as per-ticker history (task scope §8).
+    assert "key_facts" not in body["items"][0]
+    assert "price_context" not in body["items"][0]
+    # No `ticker` at the top level — unlike `/instruments/{ticker}/insights`,
+    # each item carries its own ticker instead (task scope §8).
+    assert "ticker" not in body
+    assert fake.received_limit == 20
+
+
+def test_list_recent_insights_empty_result() -> None:
+    app = create_app()
+    _override_recent(app, _FakeListRecentInsights(result=[]))
+    client = TestClient(app)
+
+    response = client.get("/insights")
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+
+
+def test_list_recent_insights_respects_limit_query_param() -> None:
+    app = create_app()
+    fake = _FakeListRecentInsights(result=[_sample_saved_insight()])
+    _override_recent(app, fake)
+    client = TestClient(app)
+
+    response = client.get("/insights?limit=5")
+
+    assert response.status_code == 200
+    assert fake.received_limit == 5
+
+
+def test_list_recent_insights_limit_too_high_returns_422() -> None:
+    app = create_app()
+    _override_recent(app, _FakeListRecentInsights(result=[]))
+    client = TestClient(app)
+
+    response = client.get("/insights?limit=1000")
+
+    assert response.status_code == 422
+
+
+def test_list_recent_insights_limit_zero_or_negative_returns_422() -> None:
+    app = create_app()
+    _override_recent(app, _FakeListRecentInsights(result=[]))
+    client = TestClient(app)
+
+    assert client.get("/insights?limit=0").status_code == 422
+    assert client.get("/insights?limit=-1").status_code == 422
+
+
+def test_list_recent_insights_without_database_configured_returns_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same safe-503, no-SQL-detail pattern as the other insight
+    endpoints when `TRADING_AI_DATABASE_URL` is unset."""
+    monkeypatch.delenv("TRADING_AI_DATABASE_URL", raising=False)
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/insights")
+
+    assert response.status_code == 503
+    assert "sql" not in response.text.lower()
+    assert "traceback" not in response.text.lower()
 
 
 def test_get_insight_detail_success() -> None:
