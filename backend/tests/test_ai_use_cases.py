@@ -10,8 +10,10 @@ import pytest
 
 from trading_ai.ai.types import (
     AIInsufficientDataError,
+    ConfidenceLevel,
     InstrumentAnalysis,
     InstrumentAnalysisInput,
+    KeyFact,
 )
 from trading_ai.ai.use_cases import GenerateInstrumentAnalysis
 from trading_ai.market_data.types import (
@@ -143,10 +145,20 @@ class FakeAIGateway:
             summary="s",
             price_context="p",
             news_context="n",
+            key_facts=(KeyFact(fact="f", source="Текущая котировка"),),
+            insight_hypothesis="h",
+            confidence=ConfidenceLevel.MEDIUM,
+            confidence_reason="cr",
+            considerations=("c",),
             risks=("r",),
+            key_drivers=("kd",),
+            data_freshness="df",
+            source_data_as_of=datetime.now(timezone.utc),
             disclaimer="d",
             provider="xai",
             model="grok-4.5",
+            prompt_version="instrument-analysis-v2",
+            schema_version="insight-structure-v1",
         )
 
 

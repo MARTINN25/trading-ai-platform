@@ -31,16 +31,19 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from trading_ai.ai.prompts import SYSTEM_INSTRUCTIONS, build_user_content
+from trading_ai.ai.prompts import PROMPT_VERSION, SYSTEM_INSTRUCTIONS, build_user_content
 from trading_ai.ai.types import (
     DISCLAIMER_TEXT,
+    INSIGHT_SCHEMA_VERSION,
     AIAnalysisError,
     AIInvalidOutputError,
     AIProviderUnavailableError,
     AIRateLimitedError,
     AITimeoutError,
+    ConfidenceLevel,
     InstrumentAnalysis,
     InstrumentAnalysisInput,
+    KeyFact,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,7 +56,29 @@ _DEFAULT_MODEL = "grok-4.5"
 # attempt, no retry (task scope §11, ADR-0007 §34: retry only for
 # transient errors, and even then never automatically here — a
 # "Повторить"/"Обновить AI-анализ" user click is the retry mechanism).
-_REQUEST_TIMEOUT_SECONDS = 30.0
+# Raised from 30s (Instrument AI Analysis) to 60s here (Insight
+# Persistence & Structure Completion): FR-018's structured output went
+# from 4 required fields to 10, which measurably increases generation
+# time — a real 504 was observed live against a v1-era 30s bound during
+# this task's own browser verification, not a hypothetical concern.
+_REQUEST_TIMEOUT_SECONDS = 60.0
+
+# FR-018's 10 mandatory sections, minus `disclaimer` (never model-
+# generated, DISCLAIMER_TEXT is injected after parsing) and minus
+# "Актуальность использованных данных" (`data_freshness`/
+# `source_data_as_of` — always backend-computed from
+# `InstrumentAnalysisInput`, never asked of the model — see
+# `ai/types.py`'s `InstrumentAnalysis` docstring for the full 10-section
+# mapping, including why "Анализ" isn't its own field).
+_KEY_FACT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "fact": {"type": "string"},
+        "source": {"type": "string"},
+    },
+    "required": ["fact", "source"],
+    "additionalProperties": False,
+}
 
 _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
     "name": "instrument_analysis",
@@ -63,9 +88,26 @@ _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
             "summary": {"type": "string"},
             "price_context": {"type": "string"},
             "news_context": {"type": "string"},
+            "key_facts": {"type": "array", "items": _KEY_FACT_SCHEMA},
+            "insight_hypothesis": {"type": "string"},
+            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            "confidence_reason": {"type": "string"},
+            "considerations": {"type": "array", "items": {"type": "string"}},
             "risks": {"type": "array", "items": {"type": "string"}},
+            "key_drivers": {"type": "array", "items": {"type": "string"}},
         },
-        "required": ["summary", "price_context", "news_context", "risks"],
+        "required": [
+            "summary",
+            "price_context",
+            "news_context",
+            "key_facts",
+            "insight_hypothesis",
+            "confidence",
+            "confidence_reason",
+            "considerations",
+            "risks",
+            "key_drivers",
+        ],
         "additionalProperties": False,
     },
     "strict": True,
@@ -102,6 +144,17 @@ def contains_forbidden_language(text: str) -> bool:
     return any(pattern.search(text) for pattern in _FORBIDDEN_PATTERNS)
 
 
+class KeyFactSchema(BaseModel):
+    """Local source of truth for one `key_facts` entry — see `ai/types.py`'s
+    `KeyFact` docstring for why `source` is a plain, model-copied label
+    rather than a full provenance record."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fact: str = Field(min_length=1, max_length=500)
+    source: str = Field(min_length=1, max_length=200)
+
+
 class ModelOutputSchema(BaseModel):
     """Local source of truth (ADR-0007 §28-29) — validated independently
     of whatever the provider's own "strict" structured-output mode claims
@@ -109,14 +162,22 @@ class ModelOutputSchema(BaseModel):
 
     Public (not `_`-prefixed): also reused by `ai/evaluation/evaluators.py`
     to validate raw model-shaped JSON offline, without duplicating this
-    schema."""
+    schema. Covers 8 of FR-018's 10 sections — `disclaimer` and
+    `data_freshness`/`source_data_as_of` are never model output (see
+    `ai/types.py`'s `InstrumentAnalysis` docstring)."""
 
     model_config = ConfigDict(extra="forbid")
 
     summary: str = Field(min_length=1, max_length=2000)
     price_context: str = Field(min_length=1, max_length=1000)
     news_context: str = Field(min_length=1, max_length=1000)
+    key_facts: list[KeyFactSchema] = Field(min_length=1, max_length=10)
+    insight_hypothesis: str = Field(min_length=1, max_length=1000)
+    confidence: ConfidenceLevel
+    confidence_reason: str = Field(min_length=1, max_length=500)
+    considerations: list[str] = Field(min_length=1, max_length=6)
     risks: list[str] = Field(min_length=1, max_length=6)
+    key_drivers: list[str] = Field(min_length=1, max_length=5)
 
 
 class XAIGateway:
@@ -143,7 +204,7 @@ class XAIGateway:
         started = time.monotonic()
         try:
             response = await self._fetch_raw(analysis_input)
-            analysis, usage = self._parse_response(analysis_input.ticker, response)
+            analysis, usage = self._parse_response(analysis_input, response)
         except AIAnalysisError as exc:
             self._log(analysis_input.ticker, started, status=type(exc).__name__)
             raise
@@ -186,8 +247,9 @@ class XAIGateway:
         return response
 
     def _parse_response(
-        self, ticker: str, response: httpx.Response
+        self, analysis_input: InstrumentAnalysisInput, response: httpx.Response
     ) -> tuple[InstrumentAnalysis, tuple[int | None, int | None]]:
+        ticker = analysis_input.ticker
         if response.status_code == 429:
             raise AIRateLimitedError("provider rate limit exceeded")
         if response.status_code in (401, 403):
@@ -226,10 +288,22 @@ class XAIGateway:
             raise AIInvalidOutputError("model output failed schema validation") from exc
 
         combined_text = " ".join(
-            [validated.summary, validated.price_context, validated.news_context, *validated.risks]
+            [
+                validated.summary,
+                validated.price_context,
+                validated.news_context,
+                validated.insight_hypothesis,
+                validated.confidence_reason,
+                *validated.considerations,
+                *validated.risks,
+                *validated.key_drivers,
+                *(fact.fact for fact in validated.key_facts),
+            ]
         )
         if contains_forbidden_language(combined_text):
             raise AIInvalidOutputError("model output contained forbidden recommendation language")
+
+        data_freshness, source_data_as_of = compute_data_freshness(analysis_input)
 
         analysis = InstrumentAnalysis(
             ticker=ticker,
@@ -237,10 +311,22 @@ class XAIGateway:
             summary=validated.summary,
             price_context=validated.price_context,
             news_context=validated.news_context,
+            key_facts=tuple(
+                KeyFact(fact=item.fact, source=item.source) for item in validated.key_facts
+            ),
+            insight_hypothesis=validated.insight_hypothesis,
+            confidence=validated.confidence,
+            confidence_reason=validated.confidence_reason,
+            considerations=tuple(validated.considerations),
             risks=tuple(validated.risks),
+            key_drivers=tuple(validated.key_drivers),
+            data_freshness=data_freshness,
+            source_data_as_of=source_data_as_of,
             disclaimer=DISCLAIMER_TEXT,
             provider=SOURCE,
             model=self._model,
+            prompt_version=PROMPT_VERSION,
+            schema_version=INSIGHT_SCHEMA_VERSION,
         )
 
         usage_obj = payload.get("usage")
@@ -294,3 +380,39 @@ class XAIGateway:
                 status,
                 latency_ms,
             )
+
+
+def compute_data_freshness(analysis_input: InstrumentAnalysisInput) -> tuple[str, datetime | None]:
+    """FR-018 §9 ("Актуальность использованных данных") — a fact about
+    the request, already known with certainty, so it is computed here
+    rather than asked of the model (see `InstrumentAnalysis`'s
+    docstring). Returns the Russian prose plus the underlying quote
+    timestamp, so the persisted row can keep both the human-readable
+    statement and a structured, queryable value (task scope §6:
+    "source-data timestamps").
+
+    Public (not `_`-prefixed): also reused by `ai/evaluation/dataset.py`
+    so hand-authored reference responses compute this the same way a
+    real generation would.
+    """
+    price = analysis_input.price
+    parts: list[str] = []
+    if price.quote_available and price.as_of is not None:
+        parts.append(f"котировка актуальна на {price.as_of.isoformat()}")
+    else:
+        parts.append("котировка недоступна")
+
+    if analysis_input.history.history_available:
+        parts.append(f"история цены доступна за период {analysis_input.history.period}")
+    else:
+        parts.append("история цены недоступна")
+
+    if analysis_input.news_available:
+        count = len(analysis_input.news)
+        parts.append(f"новости доступны ({count} заголовков)" if count else "новости доступны, но не найдены")
+    else:
+        parts.append("новости недоступны")
+
+    freshness_text = "; ".join(parts) + "."
+    source_data_as_of = price.as_of if price.quote_available else None
+    return freshness_text, source_data_as_of

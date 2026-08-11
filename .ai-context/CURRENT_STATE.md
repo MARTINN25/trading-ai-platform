@@ -53,6 +53,22 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
+Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insight-persistence`) — доводит существующий Instrument AI Analysis до обязательных MVP-требований: FR-018 (10 обязательных секций insight), FR-019 (явный категориальный confidence), FR-034 (persistence + история инсайтов), FR-011 (минимальный source attribution ключевых фактов), ADR-0004/ADR-0007 provenance requirements.
+
+- **Product Owner decision (через AskUserQuestion, не решено самостоятельно)**: сохранение инсайта — **explicit**, кнопка «Сохранить инсайт» (не auto-save); `docs/product/USER_JOURNEYS.md` UJ-013 явно оставляла этот выбор нерешённым;
+- `InstrumentAnalysis` (`ai/types.py`) расширен до полного FR-018/FR-019: `key_facts` (fact+source), `insight_hypothesis`, `confidence` (категориальный enum HIGH/MEDIUM/LOW, не численная псевдо-точность), `confidence_reason`, `considerations`, `key_drivers`, `data_freshness` (backend-computed, не модель), `source_data_as_of`, `prompt_version`, `schema_version`; `PROMPT_VERSION` поднят до `instrument-analysis-v2`; новая независимая ось `INSIGHT_SCHEMA_VERSION = "insight-structure-v1"`;
+- Сохранение без доверия к frontend: генерация кладёт результат в processes-local `PendingAnalysisCache` (TTL 30 мин, одноразовый opaque token), `POST /instruments/{ticker}/insights` принимает только `{analysis_token}` — вся структура/provenance берётся из server-held копии, не из тела запроса (`extra="forbid"`, повторное использование токена → 404);
+- Новая таблица `insights` (миграция `0003_insights`, ревизует `0002_watchlist_items`), только INSERT/SELECT (ADR-0004 §20 immutability — нет update/delete пути ни на уровне repository, ни use cases); JSONB для `key_facts`/`considerations`/`risks`/`key_drivers`; индекс по `(ticker, created_at)`; реально прогнан upgrade→downgrade→upgrade→current цикл против Compose PostgreSQL;
+- `InsightRepository`/`SaveInsight`/`ListInstrumentInsights`/`GetInsightDetail` — новые минимальные компоненты; `GET /instruments/{ticker}/insights` (newest-first, максимум 20), `GET /insights/{id}`;
+- Frontend: `AiAnalysisSection` рендерит все 10 секций + кнопку «Сохранить инсайт»; новый `InsightHistorySection` — «История AI-анализов», newest-first, expand-on-demand detail с provenance;
+- Evaluation harness (построенный предыдущей задачей) обновлён под новую схему, не ослаблен: `ai/evaluation/dataset.py` пересобран под все 10 полей, `evaluators.py` получил 7 новых проверок (`check_key_facts`, `check_confidence_valid`, `check_confidence_reflects_data_gaps` и др.); offline `12/12 passed, 0 safety violations`; live evaluation (opt-in, 3 представительных кейса) прошла на реальной модели;
+- Реальный live-таймаут `AITimeoutError` был получен вживую на прежнем 30-секундном пороге (схема ~2.5x больше) — таймаут честно поднят до 60с, не замаскирован;
+- Не добавлено: FR-035 user ratings, automatic outcome tracking, trade journal, notes, market-direction navigation, portfolio, auth, Redis, worker, background AI generation, WebSocket, vector DB, RAG, agents, chat, editing/deletion историчных insight.
+
+Реально проверено: `pytest -v` → 309 passed, 18 skipped (без регрессий); `mypy src tests` → чисто (72 файла); `alembic current` → `0003_insights (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл подтверждён, `watchlist_items` не тронута; offline evaluation → 12/12, 0 violations; live evaluation (opt-in) → 3/3, 0 violations; полная real-browser верификация (generate → структура/confidence → save → F5 → история сохраняется → detail с provenance → вторая генерация/сохранение → newest-first → chart/news/search/watchlist продолжают работать), тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
+
+## 4a. Предыдущая ревью-задача (теперь завершена)
+
 AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) — первый, намеренно небольшой, воспроизводимый evaluation harness для уже существующего `GenerateInstrumentAnalysis` (ADR-0007 §52 явно требует evaluation dataset до дальнейшего расширения production-использования модели). **Не пользовательская фича** — frontend не менялся вообще, ничего не выполняется в браузере, ничего не вызывает market/news provider:
 
 - **ADR-0007 §52 требует**: evaluation dataset (создаётся отдельно, не в самом ADR — это и есть эта задача); проверку factual grounding, schema adherence, refusal correctness, prompt injection resistance, русского языка, latency/cost/stability; regression между моделями/provider на одинаковых сценариях; запрет production-изменения (модель/provider/значимый prompt) без regression evaluation; численные пороги качества ADR не задаёт. Ни LLM-as-judge, ни отдельный benchmark framework, ни новый ADR ADR-0007 §52 не требует — новый ADR **не создавался**, задача — implementation-деталь внутри уже утверждённой `llm_gateway`-границы;
@@ -134,15 +150,15 @@ AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) �
 
 ## 7. Последняя завершённая задача
 
-Instrument Search Vertical Slice (включая R1/R2-коррекции: dedup/ranking для одинаковых тикеров на разных биржах, затем Product Owner decision — MVP scope ограничен US-listed equities).
+AI Quality Evaluation Vertical Slice — завершён.
 
 ## 8. Текущая задача
 
-AI Quality Evaluation Vertical Slice — на ревью. Это baseline, не финальная система evaluation — semantic factual grounding намеренно не решён (открытый вопрос, не regex-ами), LLM-as-judge не добавлен (ADR-0007 §52 его не требует для этого первого slice).
+Insight Persistence & Structure Completion Vertical Slice — на ревью.
 
 ## 9. Следующий планируемый блок
 
-Следующий продуктовый vertical slice определяется по roadmap/ADR после ревью AI Quality Evaluation Vertical Slice и по факту оценки текущего baseline (например: расширение evaluation dataset, рассмотрение необходимости model-based/human review процесса для semantic grounding, либо иной блок по roadmap — не предопределено этой записью).
+Вероятно insight evaluation / journal / market navigation — только согласно roadmap после merge Insight Persistence & Structure Completion Vertical Slice; не предопределено этой записью, MVP в целом не считается завершённым.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 

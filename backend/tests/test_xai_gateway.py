@@ -19,6 +19,7 @@ from trading_ai.ai.types import (
     AIProviderUnavailableError,
     AIRateLimitedError,
     AITimeoutError,
+    ConfidenceLevel,
     HistorySummaryFact,
     InstrumentAnalysisInput,
     NewsHeadlineFact,
@@ -27,17 +28,29 @@ from trading_ai.ai.types import (
 
 _FAKE_API_KEY = "test-xai-secret-should-never-leak"
 
-_SUCCESS_CONTENT = json.dumps(
-    {
-        "summary": "Компания демонстрирует смешанные показатели за последний период.",
-        "price_context": "Цена снизилась на 2% за последний торговый день по имеющимся данным.",
-        "news_context": "Недавние заголовки упоминают понижение рейтинга аналитиками.",
-        "risks": [
-            "Исторические данные ограничены выбранным периодом.",
-            "Часть новостных данных может быть неполной.",
-        ],
-    }
-)
+# Every field FR-018 requires (see ai/gateway.py's ModelOutputSchema) —
+# omitting any of the 6 new ones (key_facts/insight_hypothesis/
+# confidence/confidence_reason/considerations/key_drivers) would fail
+# schema validation, same as the original 4.
+_FULL_VALID_FIELDS: dict[str, object] = {
+    "summary": "Компания демонстрирует смешанные показатели за последний период.",
+    "price_context": "Цена снизилась на 2% за последний торговый день по имеющимся данным.",
+    "news_context": "Недавние заголовки упоминают понижение рейтинга аналитиками.",
+    "key_facts": [
+        {"fact": "Цена снизилась на 2% за последний торговый день.", "source": "Текущая котировка"},
+    ],
+    "insight_hypothesis": "Снижение может отражать реакцию на понижение рейтинга.",
+    "confidence": "medium",
+    "confidence_reason": "Данные о цене доступны, но новостной контекст ограничен.",
+    "considerations": ["Стоит проверить дальнейшую динамику в последующие дни."],
+    "risks": [
+        "Исторические данные ограничены выбранным периодом.",
+        "Часть новостных данных может быть неполной.",
+    ],
+    "key_drivers": ["Снижение цены на 2%.", "Понижение рейтинга аналитиками."],
+}
+
+_SUCCESS_CONTENT = json.dumps(_FULL_VALID_FIELDS)
 
 _SUCCESS_PAYLOAD: dict[str, Any] = {
     "id": "chatcmpl-test",
@@ -105,6 +118,21 @@ async def test_generate_instrument_analysis_maps_successful_response() -> None:
         "AI-анализ носит информационный характер и не является инвестиционной рекомендацией."
     )
     assert analysis.generated_at.tzinfo is not None
+    # FR-018's new sections:
+    assert len(analysis.key_facts) == 1
+    assert analysis.key_facts[0].fact != ""
+    assert analysis.key_facts[0].source == "Текущая котировка"
+    assert analysis.insight_hypothesis != ""
+    assert analysis.confidence == ConfidenceLevel.MEDIUM
+    assert analysis.confidence_reason != ""
+    assert len(analysis.considerations) == 1
+    assert len(analysis.key_drivers) == 2
+    # data_freshness/source_data_as_of are backend-computed, never from
+    # the model's JSON content.
+    assert "котировка актуальна" in analysis.data_freshness
+    assert analysis.source_data_as_of is not None
+    assert analysis.prompt_version == "instrument-analysis-v2"
+    assert analysis.schema_version == "insight-structure-v1"
 
 
 @pytest.mark.anyio
@@ -215,15 +243,7 @@ async def test_generate_instrument_analysis_schema_validation_failure_raises_inv
 
 @pytest.mark.anyio
 async def test_generate_instrument_analysis_extra_field_rejected_by_strict_schema() -> None:
-    bad_content = json.dumps(
-        {
-            "summary": "ok summary text",
-            "price_context": "ok price text",
-            "news_context": "ok news text",
-            "risks": ["risk one"],
-            "recommendation": "BUY",  # not part of the internal schema
-        }
-    )
+    bad_content = json.dumps({**_FULL_VALID_FIELDS, "recommendation": "BUY"})
     payload = {**_SUCCESS_PAYLOAD, "choices": [{"message": {"content": bad_content}}]}
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -236,12 +256,7 @@ async def test_generate_instrument_analysis_extra_field_rejected_by_strict_schem
 @pytest.mark.anyio
 async def test_generate_instrument_analysis_forbidden_language_rejected() -> None:
     bad_content = json.dumps(
-        {
-            "summary": "На основании данных, Strong Buy для этого актива.",
-            "price_context": "Цена выросла.",
-            "news_context": "Новости положительные.",
-            "risks": ["Рынок волатилен."],
-        }
+        {**_FULL_VALID_FIELDS, "summary": "На основании данных, Strong Buy для этого актива."}
     )
     payload = {**_SUCCESS_PAYLOAD, "choices": [{"message": {"content": bad_content}}]}
 
@@ -255,13 +270,79 @@ async def test_generate_instrument_analysis_forbidden_language_rejected() -> Non
 @pytest.mark.anyio
 async def test_generate_instrument_analysis_target_price_language_rejected() -> None:
     bad_content = json.dumps(
-        {
-            "summary": "Обзор ситуации по инструменту.",
-            "price_context": "Аналитики называют target price в $250.",
-            "news_context": "Новости нейтральные.",
-            "risks": ["Неопределённость сохраняется."],
-        }
+        {**_FULL_VALID_FIELDS, "price_context": "Аналитики называют target price в $250."}
     )
+    payload = {**_SUCCESS_PAYLOAD, "choices": [{"message": {"content": bad_content}}]}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(AIInvalidOutputError):
+        await _gateway(handler).generate_instrument_analysis(_sample_input())
+
+
+@pytest.mark.anyio
+async def test_generate_instrument_analysis_forbidden_language_in_insight_hypothesis_rejected() -> None:
+    """Forbidden-language scanning covers the *new* FR-018 fields too,
+    not just the original summary/price_context/news_context/risks."""
+    bad_content = json.dumps(
+        {**_FULL_VALID_FIELDS, "insight_hypothesis": "Рекомендую купить на этой новости."}
+    )
+    payload = {**_SUCCESS_PAYLOAD, "choices": [{"message": {"content": bad_content}}]}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(AIInvalidOutputError):
+        await _gateway(handler).generate_instrument_analysis(_sample_input())
+
+
+@pytest.mark.anyio
+async def test_generate_instrument_analysis_forbidden_language_in_considerations_rejected() -> None:
+    bad_content = json.dumps(
+        {**_FULL_VALID_FIELDS, "considerations": ["Целевая цена в районе $300."]}
+    )
+    payload = {**_SUCCESS_PAYLOAD, "choices": [{"message": {"content": bad_content}}]}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(AIInvalidOutputError):
+        await _gateway(handler).generate_instrument_analysis(_sample_input())
+
+
+@pytest.mark.anyio
+async def test_generate_instrument_analysis_invalid_confidence_value_rejected() -> None:
+    """`confidence` must be one of the three documented `ConfidenceLevel`
+    values — not a fabricated numeric score (task scope §3)."""
+    bad_content = json.dumps({**_FULL_VALID_FIELDS, "confidence": "83.7%"})
+    payload = {**_SUCCESS_PAYLOAD, "choices": [{"message": {"content": bad_content}}]}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(AIInvalidOutputError):
+        await _gateway(handler).generate_instrument_analysis(_sample_input())
+
+
+@pytest.mark.anyio
+async def test_generate_instrument_analysis_empty_key_facts_rejected() -> None:
+    bad_content = json.dumps({**_FULL_VALID_FIELDS, "key_facts": []})
+    payload = {**_SUCCESS_PAYLOAD, "choices": [{"message": {"content": bad_content}}]}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(AIInvalidOutputError):
+        await _gateway(handler).generate_instrument_analysis(_sample_input())
+
+
+@pytest.mark.anyio
+async def test_generate_instrument_analysis_data_freshness_is_never_model_supplied() -> None:
+    """Even if the model tried to supply `data_freshness`/`source_data_as_of`,
+    the schema forbids extra properties (`additionalProperties: False`) —
+    these fields are only ever backend-computed."""
+    bad_content = json.dumps({**_FULL_VALID_FIELDS, "data_freshness": "fabricated by the model"})
     payload = {**_SUCCESS_PAYLOAD, "choices": [{"message": {"content": bad_content}}]}
 
     def handler(_request: httpx.Request) -> httpx.Response:

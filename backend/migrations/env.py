@@ -22,10 +22,11 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from trading_ai.config import get_required_database_url
 from trading_ai.infrastructure.database.base import Base
 
-# Imported for its side effect of registering `watchlist_items` on
-# `Base.metadata` — required so `--autogenerate` can see it. Not used
-# directly in this module.
+# Imported for its side effect of registering `watchlist_items`/
+# `insights` on `Base.metadata` — required so `--autogenerate` can see
+# them. Not used directly in this module.
 from trading_ai.watchlist import models as _watchlist_models  # noqa: F401
+from trading_ai.insights import models as _insights_models  # noqa: F401
 
 config = context.config
 

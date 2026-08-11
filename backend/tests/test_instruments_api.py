@@ -19,7 +19,9 @@ from trading_ai.ai.types import (
     AIProviderUnavailableError,
     AIRateLimitedError,
     AITimeoutError,
+    ConfidenceLevel,
     InstrumentAnalysis,
+    KeyFact,
 )
 from trading_ai.api.routes.instruments import (
     get_generate_instrument_analysis_use_case,
@@ -570,10 +572,20 @@ def _sample_analysis() -> InstrumentAnalysis:
         summary="Краткий вывод по инструменту.",
         price_context="Цена снизилась за последний день.",
         news_context="Недавние новости упоминают понижение рейтинга.",
+        key_facts=(KeyFact(fact="Цена снизилась.", source="Текущая котировка"),),
+        insight_hypothesis="Снижение может быть связано с понижением рейтинга.",
+        confidence=ConfidenceLevel.MEDIUM,
+        confidence_reason="Котировка доступна, но новостной контекст ограничен.",
+        considerations=("Стоит проверить дальнейшую реакцию рынка.",),
         risks=("Ограниченные исторические данные.",),
+        key_drivers=("Снижение цены.", "Понижение рейтинга."),
+        data_freshness="котировка актуальна на 2026-08-10T12:00:00+00:00.",
+        source_data_as_of=datetime.now(timezone.utc),
         disclaimer="AI-анализ носит информационный характер и не является инвестиционной рекомендацией.",
         provider="xai",
         model="grok-4.5",
+        prompt_version="instrument-analysis-v2",
+        schema_version="insight-structure-v1",
     )
 
 
@@ -596,6 +608,18 @@ def test_generate_instrument_analysis_success_returns_structured_result() -> Non
     )
     assert body["source"] == "xai"
     assert fake_use_case.received_ticker == "AAPL"
+    # FR-018's new sections in the transport DTO:
+    assert body["key_facts"] == [{"fact": "Цена снизилась.", "source": "Текущая котировка"}]
+    assert body["insight_hypothesis"] == "Снижение может быть связано с понижением рейтинга."
+    assert body["confidence"] == "medium"
+    assert body["confidence_reason"] != ""
+    assert body["considerations"] == ["Стоит проверить дальнейшую реакцию рынка."]
+    assert body["key_drivers"] == ["Снижение цены.", "Понижение рейтинга."]
+    assert body["data_freshness"] != ""
+    # The save token — present, but never analysis content the client
+    # could tamper with (task scope §12).
+    assert isinstance(body["analysis_token"], str)
+    assert body["analysis_token"] != ""
 
 
 def test_generate_instrument_analysis_invalid_ticker_returns_422() -> None:

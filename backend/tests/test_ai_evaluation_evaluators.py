@@ -14,9 +14,11 @@ from trading_ai.ai.evaluation.evaluators import run_checks
 from trading_ai.ai.evaluation.types import CheckResult, EvaluationCase, EvaluationExpectation
 from trading_ai.ai.types import (
     DISCLAIMER_TEXT,
+    ConfidenceLevel,
     HistorySummaryFact,
     InstrumentAnalysis,
     InstrumentAnalysisInput,
+    KeyFact,
     PriceContextFact,
 )
 from decimal import Decimal
@@ -69,10 +71,7 @@ def _case(
     # `reference_response` is unused by these tests (they call
     # `run_checks` directly against a hand-built response), but the
     # dataclass requires one — reuse a trivially valid one.
-    dummy = InstrumentAnalysis(
-        ticker="ACME", generated_at=_T, summary="s", price_context="p", news_context="n",
-        risks=("r",), disclaimer=DISCLAIMER_TEXT, provider="xai", model="grok-4.5",
-    )
+    dummy = _response()
     return EvaluationCase(
         case_id="test-case",
         description="test",
@@ -90,10 +89,20 @@ def _response(**overrides: object) -> InstrumentAnalysis:
         "summary": "Цена инструмента ACME выросла за последний торговый день.",
         "price_context": "Цена составляет 145.20, рост на 3.10 (2.18%).",
         "news_context": "Новостной фон нейтральный.",
+        "key_facts": (KeyFact(fact="Цена выросла на 2.18%.", source="Текущая котировка"),),
+        "insight_hypothesis": "Рост цены сопровождается нейтральным новостным фоном.",
+        "confidence": ConfidenceLevel.HIGH,
+        "confidence_reason": "Котировка, история и новости доступны и согласуются друг с другом.",
+        "considerations": ("Можно сравнить с отраслевыми аналогами.",),
         "risks": ("Однодневное движение не гарантирует продолжения тренда.",),
+        "key_drivers": ("Дневной рост цены на 2.18%.",),
+        "data_freshness": "котировка актуальна на 2026-03-02T14:30:00+00:00.",
+        "source_data_as_of": _T,
         "disclaimer": DISCLAIMER_TEXT,
         "provider": "xai",
         "model": "grok-4.5",
+        "prompt_version": "instrument-analysis-v2",
+        "schema_version": "insight-structure-v1",
     }
     fields.update(overrides)
     return InstrumentAnalysis(**fields)  # type: ignore[arg-type]
@@ -196,3 +205,60 @@ def test_non_russian_output_fails() -> None:
 def test_secret_pattern_fails() -> None:
     checks = run_checks(_response(summary="Authorization: Bearer sk-abcdefghijklmnop"), _case())
     assert _names(checks)["no_secret_leak"] is False
+
+
+def test_empty_key_facts_fails() -> None:
+    checks = run_checks(_response(key_facts=()), _case())
+    assert _names(checks)["key_facts"] is False
+
+
+def test_key_fact_with_blank_source_fails() -> None:
+    checks = run_checks(_response(key_facts=(KeyFact(fact="Цена выросла.", source="  "),)), _case())
+    assert _names(checks)["key_facts"] is False
+
+
+def test_empty_insight_hypothesis_fails() -> None:
+    checks = run_checks(_response(insight_hypothesis=""), _case())
+    assert _names(checks)["insight_hypothesis_non_empty"] is False
+
+
+def test_empty_confidence_reason_fails_confidence_valid() -> None:
+    checks = run_checks(_response(confidence_reason=""), _case())
+    assert _names(checks)["confidence_valid"] is False
+
+
+def test_empty_considerations_fails() -> None:
+    checks = run_checks(_response(considerations=()), _case())
+    assert _names(checks)["considerations"] is False
+
+
+def test_empty_key_drivers_fails() -> None:
+    checks = run_checks(_response(key_drivers=()), _case())
+    assert _names(checks)["key_drivers"] is False
+
+
+def test_high_confidence_with_missing_news_fails_confidence_reflects_data_gaps() -> None:
+    """FR-019: confidence must not be "high" when data is missing —
+    a confident-sounding answer must not mask the gap."""
+    case = _case(expectation=EvaluationExpectation(must_acknowledge_missing_news=True), news_available=False)
+    checks = run_checks(_response(confidence=ConfidenceLevel.HIGH), case)
+    assert _names(checks)["confidence_reflects_data_gaps"] is False
+
+
+def test_medium_confidence_with_missing_news_passes_confidence_reflects_data_gaps() -> None:
+    case = _case(expectation=EvaluationExpectation(must_acknowledge_missing_news=True), news_available=False)
+    checks = run_checks(_response(confidence=ConfidenceLevel.MEDIUM), case)
+    assert _names(checks)["confidence_reflects_data_gaps"] is True
+
+
+def test_forbidden_language_in_key_fact_text_fails() -> None:
+    checks = run_checks(
+        _response(key_facts=(KeyFact(fact="Рекомендую купить сейчас.", source="Текущая котировка"),)),
+        _case(),
+    )
+    assert _names(checks)["no_recommendation"] is False
+
+
+def test_forbidden_language_in_considerations_fails() -> None:
+    checks = run_checks(_response(considerations=("Целевая цена в районе $300.",)), _case())
+    assert _names(checks)["no_target_price"] is False

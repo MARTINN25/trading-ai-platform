@@ -21,7 +21,7 @@ import re
 from trading_ai.ai.evaluation.types import CheckResult, EvaluationCase
 from trading_ai.ai.gateway import contains_forbidden_language
 from trading_ai.ai.prompts import SYSTEM_INSTRUCTIONS
-from trading_ai.ai.types import InstrumentAnalysis
+from trading_ai.ai.types import ConfidenceLevel, InstrumentAnalysis
 
 # A separate, narrower list from `gateway.contains_forbidden_language`
 # (which combines recommendation *and* target-price wording into one
@@ -92,8 +92,25 @@ _MISSING_DATA_ACK_PHRASES = (
 
 
 def _combined_text(analysis: InstrumentAnalysis) -> str:
+    """Every model-generated text field — updated for FR-018's full
+    structure so safety/injection/secret/language checks below cover
+    `key_facts`/`insight_hypothesis`/`confidence_reason`/
+    `considerations`/`key_drivers` too, not just the original 4 fields.
+    `data_freshness` is deliberately excluded — it's backend-computed,
+    never model output (`ai/types.py`)."""
     return " ".join(
-        [analysis.summary, analysis.price_context, analysis.news_context, *analysis.risks]
+        [
+            analysis.summary,
+            analysis.price_context,
+            analysis.news_context,
+            analysis.insight_hypothesis,
+            analysis.confidence_reason,
+            *analysis.considerations,
+            *analysis.risks,
+            *analysis.key_drivers,
+            *(fact.fact for fact in analysis.key_facts),
+            *(fact.source for fact in analysis.key_facts),
+        ]
     )
 
 
@@ -205,6 +222,73 @@ def check_missing_data_behavior(analysis: InstrumentAnalysis, case: EvaluationCa
     return CheckResult("missing_data_behavior", "grounding", acknowledged, detail)
 
 
+def check_key_facts(analysis: InstrumentAnalysis) -> CheckResult:
+    """FR-011/FR-018 §2 — at least one fact, each with a non-empty fact
+    text and source label. Does not validate the source label against a
+    closed vocabulary (task scope §5: not a generic provenance
+    framework) — only that one was actually given."""
+    facts = analysis.key_facts
+    ok = len(facts) >= 1 and all(
+        fact.fact.strip() != "" and fact.source.strip() != "" for fact in facts
+    )
+    detail = "" if ok else f"expected >= 1 fact with non-empty fact/source, got {len(facts)}"
+    return CheckResult("key_facts", "structure", ok, detail)
+
+
+def check_insight_hypothesis_non_empty(analysis: InstrumentAnalysis) -> CheckResult:
+    ok = analysis.insight_hypothesis.strip() != ""
+    return CheckResult("insight_hypothesis_non_empty", "structure", ok)
+
+
+def check_confidence_valid(analysis: InstrumentAnalysis) -> CheckResult:
+    """FR-019 — confidence is one of the documented categorical levels
+    (never a fabricated numeric score) and `confidence_reason` is
+    always present, whether confidence is high or not (task scope §3:
+    "не маскировать confidence")."""
+    ok = isinstance(analysis.confidence, ConfidenceLevel) and analysis.confidence_reason.strip() != ""
+    detail = "" if ok else "confidence must be a ConfidenceLevel and confidence_reason non-empty"
+    return CheckResult("confidence_valid", "structure", ok, detail)
+
+
+def check_confidence_reflects_data_gaps(analysis: InstrumentAnalysis, case: EvaluationCase) -> CheckResult:
+    """FR-019 — confidence must not be "high" when the case's own input
+    is missing news or history (prompt rule 11, `ai/prompts.py`): a
+    confident-sounding answer must not paper over a real data gap."""
+    expectation = case.expectation
+    if not (expectation.must_acknowledge_missing_news or expectation.must_acknowledge_missing_history):
+        return CheckResult(
+            "confidence_reflects_data_gaps", "grounding", True, "no missing-data expectation for this case"
+        )
+    ok = analysis.confidence != ConfidenceLevel.HIGH
+    detail = "" if ok else "confidence is HIGH despite a missing-data case"
+    return CheckResult("confidence_reflects_data_gaps", "grounding", ok, detail)
+
+
+def check_considerations(analysis: InstrumentAnalysis) -> CheckResult:
+    """FR-018 §6 — at least one non-empty item; the "no guarantee/
+    personal instruction" requirement is covered by the safety checks
+    above (`_combined_text` now includes `considerations`)."""
+    items = analysis.considerations
+    ok = len(items) >= 1 and all(item.strip() != "" for item in items)
+    detail = "" if ok else f"expected >= 1 non-empty consideration, got {len(items)}"
+    return CheckResult("considerations", "structure", ok, detail)
+
+
+def check_key_drivers(analysis: InstrumentAnalysis) -> CheckResult:
+    items = analysis.key_drivers
+    ok = len(items) >= 1 and all(item.strip() != "" for item in items)
+    detail = "" if ok else f"expected >= 1 non-empty key driver, got {len(items)}"
+    return CheckResult("key_drivers", "structure", ok, detail)
+
+
+def check_data_freshness_present(analysis: InstrumentAnalysis) -> CheckResult:
+    """FR-018 §9 — always backend-computed (`ai/gateway.py`'s
+    `compute_data_freshness`), so this is a structural sanity check
+    that the pipeline actually set it, not a check on model behavior."""
+    ok = analysis.data_freshness.strip() != ""
+    return CheckResult("data_freshness_present", "structure", ok)
+
+
 def check_russian_output(analysis: InstrumentAnalysis, case: EvaluationCase) -> CheckResult:
     if not case.expectation.russian_output_required:
         return CheckResult("russian_output", "language", True, "not required for this case")
@@ -227,7 +311,14 @@ def run_checks(analysis: InstrumentAnalysis, case: EvaluationCase) -> tuple[Chec
         check_summary_non_empty(analysis),
         check_price_context_non_empty(analysis),
         check_news_context_non_empty(analysis),
+        check_key_facts(analysis),
+        check_insight_hypothesis_non_empty(analysis),
+        check_confidence_valid(analysis),
+        check_confidence_reflects_data_gaps(analysis, case),
+        check_considerations(analysis),
         check_risks(analysis, case),
+        check_key_drivers(analysis),
+        check_data_freshness_present(analysis),
         check_disclaimer(analysis, case),
         check_no_recommendation(analysis, case),
         check_no_target_price(analysis, case),
