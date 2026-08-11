@@ -53,6 +53,20 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
+Trade Journal Vertical Slice (ветка `feat/trade-journal`) — FR-030 (базовый дневник сделок), UJ-017 (создание записи, опционально со ссылкой на ранее сформированный инсайт).
+
+- **Product Owner decisions (через AskUserQuestion, не решено самостоятельно)**: mutability — **editable, no delete** (запись можно скорректировать, `updated_at` фиксирует факт правки; delete-эндпоинта/UI нет, soft-delete не вводится); формат результата — **категориальный статус + опциональный текст** (`TradeResultStatus`: `profit`/`loss`/`breakeven`/`open`, 4 значения — «open» добавлен отдельным явным вопросом Product Owner, т.к. документы не задавали конкретные значения); формат направления — **категориальный enum** `TradeDirection` (`long`/`short`);
+- Новый модуль `backend/src/trading_ai/journal/` (MODULE_BOUNDARIES.md §13) — зависит от `insights` только для проверки существования `insight_id`, никогда не читает/пишет содержимое инсайта; никогда не обращается к `ai`/`llm_gateway`/`market_data` напрямую;
+- **Не брокерская/order/portfolio-подсистема**: намеренно нет entry/exit price, quantity, commission, leverage, stop-loss/take-profit, order id, execution venue, realized P&L — FR-030 их не требует;
+- Новая таблица `journal_entries` (миграция `0005_journal_entries`, ревизует `0004_insight_evaluations`) — обычные реляционные колонки, не JSONB (каждое поле — маленький queryable факт); FK `insight_id → insights.id` без `ON DELETE CASCADE` (delete инсайтов не существует в проекте вообще); реально прогнан upgrade→downgrade→upgrade→current цикл против Compose PostgreSQL, FK-integrity подтверждена вживую;
+- `JournalRepository`/`CreateJournalEntry`/`ListJournalEntries`/`GetJournalEntry`/`UpdateJournalEntry` — новые минимальные компоненты; `POST/GET /journal`, `GET/PUT /journal/{id}`, оба DTO — `extra="forbid"` (frontend не может передать содержимое/provenance инсайта или брокерские поля); нет `DELETE /journal/{id}`;
+- Frontend: минимальная точка входа «Дневник сделок» на главной странице (без полноценной market-навигации — FR-003 остаётся отдельным будущим срезом); новый маршрут `/journal`; форма создания/редактирования; ссылка «Добавить в дневник» из `InsightHistorySection` — предзаполняет `ticker`/`insight_id` через query-параметры (не insight-контент, backend перепроверяет `insight_id` заново); найденный и исправленный в этой же задаче баг — URL с prefill query-параметрами очищается через `router.replace` после создания/отмены, иначе F5 повторно открывал бы форму создания;
+- Не добавлено: broker integration, orders, positions, portfolio, P&L engine, automatic trade import, CSV import, разбор сделки ассистентом (FR-031), Notes (FR-032), market navigation (FR-003), auth, Redis, worker, WebSocket, новый LLM, RAG, agents.
+
+Реально проверено: `pytest -v` → 391 passed, 31 skipped (без регрессий, было 344/23); `mypy src tests` → чисто (92 файла); `alembic current` → `0005_journal_entries (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл + FK-constraint подтверждены; AI-файлы не менялись — offline/live evaluation не запускались повторно (не требовалось, обосновано); полная real-browser верификация (Дневник-ссылка на главной → генерация+сохранение инсайта → «Добавить в дневник» → форма предзаполнена ticker+insight_id → создание записи → F5 → запись сохранилась → вторая независимая запись → редактирование → F5 → правка сохранилась, «(изменено)» показано → нет кнопки/эндпоинта удаления → watchlist/chart/news/AI/история инсайтов продолжают работать); тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
+
+## 4a. Предыдущая ревью-задача (теперь завершена)
+
 Insight Evaluation & Outcome Tracking Vertical Slice (ветка `feat/insight-evaluation`) — закрывает последний шаг канонического MVP-сценария (`PRODUCT_SCOPE.md` §21: «...сформировать инсайт → увидеть источники → сохранить → **оценить**»): FR-035 (пользовательская оценка сохранённого инсайта), FR-036/FR-038 (ручная фиксация результата, неразрывно связанная с исходным инсайтом).
 
 - **Product Owner decision (через AskUserQuestion, не решено самостоятельно)**: формат оценки — **категориальный 3-way** («Полезен» / «Частично полезен» / «Не полезен»), не binary, не числовая шкала; FR-035/UJ-014 требовали оценку, но не фиксировали формат;
@@ -67,7 +81,7 @@ Insight Evaluation & Outcome Tracking Vertical Slice (ветка `feat/insight-e
 
 Реально проверено: `pytest -v` → 344 passed, 23 skipped (без регрессий, было 309/18); `mypy src tests` → чисто (85 файлов); `alembic current` → `0004_insight_evaluations (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл + FK-constraint подтверждены; AI-файлы не менялись — offline/live evaluation не запускались повторно (не требовалось, обосновано); полная real-browser верификация (generate → save → history → evaluate → F5 → оценка сохранилась → outcome → F5 → результат сохранился → provenance/содержимое исходного инсайта не изменились → вторая независимая запись без унаследованной оценки/результата → watchlist/chart/news/search продолжают работать), включая honest recovery от двух реальных Twelve Data rate-limit окон; тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4a. Предыдущая ревью-задача (теперь завершена)
+## 4b. Ревью-задача до предыдущей (тоже завершена)
 
 Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insight-persistence`) — доводит существующий Instrument AI Analysis до обязательных MVP-требований: FR-018 (10 обязательных секций insight), FR-019 (явный категориальный confidence), FR-034 (persistence + история инсайтов), FR-011 (минимальный source attribution ключевых фактов), ADR-0004/ADR-0007 provenance requirements.
 
@@ -83,7 +97,7 @@ Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insi
 
 Реально проверено: `pytest -v` → 309 passed, 18 skipped (без регрессий); `mypy src tests` → чисто (72 файла); `alembic current` → `0003_insights (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл подтверждён, `watchlist_items` не тронута; offline evaluation → 12/12, 0 violations; live evaluation (opt-in) → 3/3, 0 violations; полная real-browser верификация (generate → структура/confidence → save → F5 → история сохраняется → detail с provenance → вторая генерация/сохранение → newest-first → chart/news/search/watchlist продолжают работать), тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4b. Ревью-задача до предыдущей (тоже завершена)
+## 4c. Более ранняя ревью-задача (тоже завершена)
 
 AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) — первый, намеренно небольшой, воспроизводимый evaluation harness для уже существующего `GenerateInstrumentAnalysis` (ADR-0007 §52 явно требует evaluation dataset до дальнейшего расширения production-использования модели). **Не пользовательская фича** — frontend не менялся вообще, ничего не выполняется в браузере, ничего не вызывает market/news provider:
 
@@ -166,15 +180,15 @@ AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) �
 
 ## 7. Последняя завершённая задача
 
-Insight Persistence & Structure Completion Vertical Slice — завершён.
+Insight Evaluation & Outcome Tracking Vertical Slice — завершён.
 
 ## 8. Текущая задача
 
-Insight Evaluation & Outcome Tracking Vertical Slice — на ревью.
+Trade Journal Vertical Slice — на ревью.
 
 ## 9. Следующий планируемый блок
 
-Следующий продуктовый vertical slice определяется по roadmap/FUNCTIONAL_REQUIREMENTS.md после ревью Insight Evaluation & Outcome Tracking Vertical Slice — вероятные кандидаты (не предрешено этой записью): Trade Journal (FR-030), Personal Notes (FR-032), базовая навигация по рыночным разделам (FR-003/004). MVP в целом не считается завершённым.
+Следующий продуктовый vertical slice определяется по roadmap/FUNCTIONAL_REQUIREMENTS.md после ревью Trade Journal Vertical Slice — вероятные кандидаты (не предрешено этой записью): Personal Notes (FR-032), базовая навигация по рыночным разделам (FR-003/004). MVP в целом не считается завершённым.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 

@@ -24,6 +24,8 @@ from trading_ai.api.routes.instruments import register_ai_analysis_exception_han
 from trading_ai.api.routes.instruments import register_insight_exception_handlers
 from trading_ai.api.routes.instruments import register_instruments_exception_handlers
 from trading_ai.api.routes.instruments import router as instruments_router
+from trading_ai.api.routes.journal import register_journal_exception_handlers
+from trading_ai.api.routes.journal import router as journal_router
 from trading_ai.api.routes.ready import router as ready_router
 from trading_ai.api.routes.watchlist import register_watchlist_exception_handlers
 from trading_ai.api.routes.watchlist import router as watchlist_router
@@ -134,11 +136,13 @@ def create_app() -> FastAPI:
     app.include_router(watchlist_router)
     app.include_router(instruments_router)
     app.include_router(evaluations_router)
+    app.include_router(journal_router)
     register_watchlist_exception_handlers(app)
     register_instruments_exception_handlers(app)
     register_ai_analysis_exception_handlers(app)
     register_insight_exception_handlers(app)
     register_evaluation_exception_handlers(app)
+    register_journal_exception_handlers(app)
     return app
 
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import {
   evaluateInsight,
   getInsightDetail,
@@ -295,6 +296,18 @@ export default function InsightHistorySection({
                         {detail.data.prompt_version} · schema {detail.data.schema_version}
                       </p>
                       <p className="insight-history-detail-disclaimer">{detail.data.disclaimer}</p>
+
+                      {/* UJ-017 alt flow: "создание записи со ссылкой на
+                          ранее сформированный инсайт" — the journal page
+                          re-validates insight_id itself; only the ticker
+                          string and a numeric id travel through this link,
+                          never insight content (task scope §14). */}
+                      <Link
+                        href={`/journal?ticker=${encodeURIComponent(ticker)}&insight_id=${item.id}`}
+                        className="insight-history-add-to-journal"
+                      >
+                        Добавить в дневник
+                      </Link>
 
                       <div className="insight-evaluation">
                         <h3>Оценка инсайта</h3>

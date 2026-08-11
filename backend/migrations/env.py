@@ -23,11 +23,13 @@ from trading_ai.config import get_required_database_url
 from trading_ai.infrastructure.database.base import Base
 
 # Imported for its side effect of registering `watchlist_items`/
-# `insights`/`insight_evaluations` on `Base.metadata` — required so
-# `--autogenerate` can see them. Not used directly in this module.
+# `insights`/`insight_evaluations`/`journal_entries` on `Base.metadata`
+# — required so `--autogenerate` can see them. Not used directly in
+# this module.
 from trading_ai.watchlist import models as _watchlist_models  # noqa: F401
 from trading_ai.insights import models as _insights_models  # noqa: F401
 from trading_ai.evaluations import models as _evaluations_models  # noqa: F401
+from trading_ai.journal import models as _journal_models  # noqa: F401
 
 config = context.config
 
