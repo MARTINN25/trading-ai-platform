@@ -5,8 +5,8 @@ Owns no transaction boundary: whoever obtained the `AsyncSession`
 when to commit or roll back — this repository never calls `commit()`
 (same rule as `watchlist.repository.WatchlistRepository`).
 
-Only `add`/`list_recent_for_ticker`/`get_by_id` exist — no update, no
-delete (task scope §10, §29; ADR-0004 §20 immutability).
+Only `add`/`list_recent_for_ticker`/`get_by_id`/`list_recent` exist —
+no update, no delete (task scope §10, §29; ADR-0004 §20 immutability).
 """
 
 from __future__ import annotations
@@ -97,3 +97,14 @@ class InsightRepository:
         )
         model = result.scalar_one_or_none()
         return _to_domain(model) if model is not None else None
+
+    async def list_recent(self, limit: int = MAX_HISTORY_ITEMS) -> list[SavedInsight]:
+        """Newest-first, bounded, cross-ticker (no `WHERE` clause) — same
+        ordering as `list_recent_for_ticker` (Phase 1, Insights/History
+        area). Read-only, no mutation, no new persistence concept."""
+        result = await self._session.execute(
+            select(InsightModel)
+            .order_by(desc(InsightModel.created_at), desc(InsightModel.id))
+            .limit(limit)
+        )
+        return [_to_domain(model) for model in result.scalars()]

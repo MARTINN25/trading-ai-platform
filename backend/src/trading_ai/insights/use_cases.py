@@ -16,6 +16,7 @@ from typing import Protocol
 from trading_ai.ai.pending_cache import PendingAnalysisCache
 from trading_ai.ai.types import InstrumentAnalysis
 from trading_ai.insights.domain import (
+    MAX_HISTORY_ITEMS,
     InsightNotFoundError,
     NewInsight,
     PendingAnalysisNotFoundError,
@@ -30,6 +31,16 @@ class _InsightRepositoryLike(Protocol):
     async def list_recent_for_ticker(self, ticker: str) -> list[SavedInsight]: ...
 
     async def get_by_id(self, insight_id: int) -> SavedInsight | None: ...
+
+
+class _RecentInsightRepositoryLike(Protocol):
+    """Deliberately a separate, narrower protocol from
+    `_InsightRepositoryLike` — a test double for `SaveInsight`/
+    `ListInstrumentInsights`/`GetInsightDetail` should not need to grow a
+    `list_recent` method it never uses just to satisfy structural typing
+    (Phase 1, Insights/History area)."""
+
+    async def list_recent(self, limit: int) -> list[SavedInsight]: ...
 
 
 def _to_new_insight(analysis: InstrumentAnalysis) -> NewInsight:
@@ -93,3 +104,15 @@ class GetInsightDetail:
         if insight is None:
             raise InsightNotFoundError(insight_id)
         return insight
+
+
+class ListRecentInsights:
+    """Cross-ticker, newest-first, bounded (Phase 1, Insights/History
+    area) — mirrors `ListInstrumentInsights` but without a ticker
+    filter. Read-only; no mutation, no new persistence concept."""
+
+    def __init__(self, repository: _RecentInsightRepositoryLike) -> None:
+        self._repository = repository
+
+    async def execute(self, limit: int = MAX_HISTORY_ITEMS) -> list[SavedInsight]:
+        return await self._repository.list_recent(limit)

@@ -127,6 +127,13 @@ export interface InstrumentInsightsResponse {
   items: InsightSummary[];
 }
 
+/** Cross-ticker equivalent of `InstrumentInsightsResponse` (Phase 1,
+ * Insights/History area) — no top-level `ticker`, since each item
+ * already carries its own (`InsightSummary.ticker`). */
+export interface RecentInsightsResponse {
+  items: InsightSummary[];
+}
+
 /** Full persisted insight — returned by both `saveInsight` and
  * `getInsightDetail`. */
 export interface InsightDetail {
@@ -593,6 +600,14 @@ function isInstrumentInsightsResponse(value: unknown): value is InstrumentInsigh
   );
 }
 
+function isRecentInsightsResponse(value: unknown): value is RecentInsightsResponse {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return Array.isArray(candidate.items) && candidate.items.every(isInsightSummary);
+}
+
 function isInsightDetail(value: unknown): value is InsightDetail {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -943,6 +958,65 @@ export async function getInstrumentInsights(ticker: string): Promise<InstrumentI
   }
 
   if (!isInstrumentInsightsResponse(data)) {
+    throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
+  }
+  return data;
+}
+
+/**
+ * Cross-ticker equivalent of `getInstrumentInsights` (Phase 1,
+ * Insights/History area — `GET /insights?limit=N`). Newest-first,
+ * bounded, read-only. Used by both `/insights` and the Overview page's
+ * "recent insights" widget.
+ */
+export async function getRecentInsights(limit?: number): Promise<RecentInsightsResponse> {
+  const query = limit !== undefined ? `?limit=${encodeURIComponent(String(limit))}` : "";
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/insights${query}`, {
+      method: "GET",
+      cache: "no-store",
+    });
+  } catch {
+    throw new InstrumentApiError(
+      "network",
+      "Не удалось соединиться с сервером. Проверьте, что backend запущен, и повторите попытку."
+    );
+  }
+
+  if (response.status === 422) {
+    throw new InstrumentApiError(
+      "invalid",
+      "Некорректный лимит.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (response.status === 503) {
+    throw new InstrumentApiError(
+      "unavailable",
+      "История инсайтов сейчас недоступна.",
+      await readBackendDetail(response)
+    );
+  }
+
+  if (!response.ok) {
+    const backendDetail = await readBackendDetail(response);
+    throw new InstrumentApiError(
+      "unexpected",
+      "Не удалось загрузить историю инсайтов. Попробуйте ещё раз.",
+      backendDetail
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new InstrumentApiError("unexpected", "Backend вернул некорректный ответ.");
+  }
+
+  if (!isRecentInsightsResponse(data)) {
     throw new InstrumentApiError("unexpected", "Backend вернул неожиданный формат данных.");
   }
   return data;

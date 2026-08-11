@@ -14,7 +14,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -30,9 +30,19 @@ from trading_ai.ai.types import (
 )
 from trading_ai.ai.use_cases import GenerateInstrumentAnalysis
 from trading_ai.infrastructure.database.session import session_scope
-from trading_ai.insights.domain import InsightNotFoundError, PendingAnalysisNotFoundError, SavedInsight
+from trading_ai.insights.domain import (
+    MAX_HISTORY_ITEMS,
+    InsightNotFoundError,
+    PendingAnalysisNotFoundError,
+    SavedInsight,
+)
 from trading_ai.insights.repository import InsightRepository
-from trading_ai.insights.use_cases import GetInsightDetail, ListInstrumentInsights, SaveInsight
+from trading_ai.insights.use_cases import (
+    GetInsightDetail,
+    ListInstrumentInsights,
+    ListRecentInsights,
+    SaveInsight,
+)
 from trading_ai.market_data.gateway import TwelveDataGateway
 from trading_ai.market_data.news_gateway import FinnhubNewsGateway
 from trading_ai.market_data.types import (
@@ -196,6 +206,14 @@ class InsightSummaryResponse(BaseModel):
 
 class InstrumentInsightsResponse(BaseModel):
     ticker: str
+    items: list[InsightSummaryResponse]
+
+
+class RecentInsightsResponse(BaseModel):
+    """Cross-ticker equivalent of `InstrumentInsightsResponse` (Phase 1,
+    Insights/History area) — no top-level `ticker`, since each item
+    already carries its own (`InsightSummaryResponse.ticker`)."""
+
     items: list[InsightSummaryResponse]
 
 
@@ -435,6 +453,12 @@ def get_insight_detail_use_case(
     return GetInsightDetail(repository)
 
 
+def get_list_recent_insights_use_case(
+    repository: Annotated[InsightRepository, Depends(get_insight_repository)],
+) -> ListRecentInsights:
+    return ListRecentInsights(repository)
+
+
 @router.get("/instruments/search", response_model=InstrumentSearchResponse)
 async def search_instruments(
     q: str,
@@ -598,6 +622,20 @@ async def list_instrument_insights(
         ticker=insights[0].ticker if insights else ticker.strip().upper(),
         items=[_to_insight_summary_response(insight) for insight in insights],
     )
+
+
+@router.get("/insights", response_model=RecentInsightsResponse)
+async def list_recent_insights(
+    use_case: Annotated[ListRecentInsights, Depends(get_list_recent_insights_use_case)],
+    limit: Annotated[int, Query(ge=1, le=MAX_HISTORY_ITEMS)] = MAX_HISTORY_ITEMS,
+) -> RecentInsightsResponse:
+    """Cross-ticker, newest-first, bounded (Phase 1, Insights/History
+    area) — registered before `GET /insights/{insight_id}` is irrelevant
+    here (different segment counts, no routing ambiguity), but kept next
+    to it for readability. Read-only: no mutation, no new persistence
+    concept, reuses the existing `insights` module end-to-end."""
+    insights = await use_case.execute(limit)
+    return RecentInsightsResponse(items=[_to_insight_summary_response(item) for item in insights])
 
 
 @router.get("/insights/{insight_id}", response_model=InsightDetailResponse)

@@ -31,9 +31,12 @@ function formatTimestamp(value: string): string {
   return timestampFormatter.format(date);
 }
 
+// Explicit plain-language explanation next to each direction value —
+// a first-time user should not need prior trading knowledge to
+// understand what "Лонг"/"Шорт" mean (Phase 1 UX clarification pass).
 const DIRECTION_LABELS: Record<TradeDirection, string> = {
-  long: "Лонг",
-  short: "Шорт",
+  long: "Лонг — ожидание роста",
+  short: "Шорт — ожидание падения",
 };
 
 const RESULT_STATUS_LABELS: Record<TradeResultStatus, string> = {
@@ -118,13 +121,18 @@ export default function TradeJournalView({
   return (
     <main className="journal-view">
       <Link href="/" className="journal-back-link">
-        ← Назад к watchlist
+        ← Обзор
       </Link>
 
       <h1>Дневник сделок</h1>
       <p className="journal-disclaimer">
         Личный дневник для ручной фиксации сделок и их результатов — не брокерская интеграция, не
         учёт позиций и не расчёт прибыли/убытка.
+      </p>
+      <p className="journal-disclaimer journal-disclaimer-strong">
+        Записи создаёте только вы. AI никогда не открывает сделки и не создаёт записи дневника
+        самостоятельно — связанный AI-инсайт ниже показан только как контекст/основание для вашего
+        решения, а не как команда или рекомендация.
       </p>
 
       {!showCreateForm && (
@@ -206,18 +214,42 @@ export default function TradeJournalView({
                   />
                 ) : (
                   <>
-                    <p className="journal-item-meta">
-                      <strong>{entry.ticker}</strong> · {DIRECTION_LABELS[entry.direction]} ·{" "}
-                      <span className={`journal-result journal-result-${entry.result_status}`}>
-                        {RESULT_STATUS_LABELS[entry.result_status]}
-                      </span>{" "}
-                      · {formatTimestamp(entry.created_at)}
-                      {entry.updated_at && <span className="journal-item-edited"> (изменено)</span>}
-                    </p>
-                    {entry.result_note && <p className="journal-item-note">{entry.result_note}</p>}
+                    <div className="journal-my-trade">
+                      <h3 className="journal-block-label">Моя сделка</h3>
+                      <p className="journal-item-meta">
+                        <Link
+                          href={`/instruments/${encodeURIComponent(entry.ticker)}`}
+                          className="journal-item-ticker-link"
+                        >
+                          {entry.ticker}
+                        </Link>{" "}
+                        · {formatTimestamp(entry.created_at)}
+                        {entry.updated_at && <span className="journal-item-edited"> (изменено)</span>}
+                      </p>
+                      <p className="journal-item-fields">
+                        Направление: {DIRECTION_LABELS[entry.direction]}
+                        <br />
+                        Результат:{" "}
+                        <span className={`journal-result journal-result-${entry.result_status}`}>
+                          {RESULT_STATUS_LABELS[entry.result_status]}
+                        </span>
+                      </p>
+                      {entry.result_note && <p className="journal-item-note">{entry.result_note}</p>}
+                    </div>
+
                     {entry.insight_id !== null && (
-                      <p className="journal-item-insight-link">Связано с инсайтом #{entry.insight_id}</p>
+                      <div className="journal-linked-insight">
+                        <h3 className="journal-block-label">Связанный AI-инсайт</h3>
+                        <p className="journal-item-insight-link">
+                          Контекст/основание, использованное при принятии решения — не команда и не
+                          рекомендация AI.{" "}
+                          <Link href={`/insights?open=${entry.insight_id}`}>
+                            Открыть инсайт #{entry.insight_id} →
+                          </Link>
+                        </p>
+                      </div>
                     )}
+
                     <button type="button" onClick={() => setEditingId(entry.id)}>
                       Изменить
                     </button>
@@ -268,6 +300,8 @@ function JournalEntryForm({
 
   return (
     <form className="journal-entry-form" onSubmit={handleSubmit}>
+      <h3 className="journal-block-label">Моя сделка</h3>
+
       <label className="journal-field">
         Тикер
         <input
@@ -322,16 +356,19 @@ function JournalEntryForm({
       </label>
 
       {values.insightId !== null && (
-        <p className="journal-field-insight-link">
-          Связано с инсайтом #{values.insightId}{" "}
-          <button
-            type="button"
-            disabled={submitting}
-            onClick={() => setValues((prev) => ({ ...prev, insightId: null }))}
-          >
-            Отвязать
-          </button>
-        </p>
+        <div className="journal-linked-insight">
+          <h3 className="journal-block-label">Связанный AI-инсайт</h3>
+          <p className="journal-field-insight-link">
+            Инсайт #{values.insightId} — контекст/основание, не команда AI.{" "}
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => setValues((prev) => ({ ...prev, insightId: null }))}
+            >
+              Отвязать
+            </button>
+          </p>
+        </div>
       )}
 
       {error && (

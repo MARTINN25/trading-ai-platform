@@ -53,7 +53,22 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
-Phase 0 — Documentation & Architecture Decisions (ветка `docs/phase0-architecture-decisions`). **Только документация** — ни один файл `backend/`, `frontend/`, миграций, prompt/schema/evaluation-кода не изменён.
+Phase 1 — Application Shell & Intelligence Workspace (ветка `feature/phase1-workspace-shell`, создана от `main` @ `88d1dfb`). **Изменения реализованы и провалидированы (backend/frontend/real-browser), но намеренно НЕ закоммичены** — задача прямо требует остановиться перед commit для ручной проверки точного набора файлов Product Owner (`GIT_WORKFLOW.md`).
+
+Product Owner утвердил конкретный объём пакета (не весь Phase 1 planning-отчёт целиком):
+
+- **Одобрено:** единый Application Shell (персистентная навигация Обзор/Рынки/История/Дневник); Overview (реальные данные — watchlist, последние инсайты, последние записи дневника, без фабрикации market breadth/индексов/макро/сентимента/алертов/сигналов); Markets (Акции — работает, Forex/Криптовалюта/Сырьё — честное состояние «недоступно», без фейковых форм); редизайн Instrument Workspace (плотная grid-компоновка, те же 5 существующих секций без изменения их бизнес-логики); кросс-тикерная История инсайтов (`/insights`, новый read-only backend endpoint); интеграция Дневника (первоклассный пункт навигации + двусторонние ссылки Инструмент↔Инсайт↔Дневник); dark-first визуальное направление как единственная (не переключаемая) тема.
+- **Не одобрено для этого пакета (сознательно не реализовано):** страница Settings, Notes CRUD, исследование/интеграция провайдеров, перевод новостей, ранжирование релевантности новостей, macro/sector/fundamentals, технические индикаторы, поведение горизонта анализа, более богатая схема FR-018, изменения prompt, изменения AI evaluation, calibration/retrieval, миграции БД, новая UI-библиотека, новая chart-библиотека.
+
+**Backend:** один новый read-only endpoint `GET /insights?limit=N` (newest-first, bounded, cross-ticker) в уже существующем модуле `insights` — новый метод `InsightRepository.list_recent`, новый use case `ListRecentInsights` (отдельный узкий Protocol `_RecentInsightRepositoryLike`, чтобы не расширять `_InsightRepositoryLike` и не ломать существующие test doubles), новый route в `api/routes/instruments.py`. Никаких новых таблиц, никакой миграции, никаких изменений в `journal`/`evaluations`/`ai`/`market_data`.
+
+**Frontend:** новый `AppShell.tsx` (единственный Client Component ради `usePathname()`, смонтирован в `layout.tsx` вокруг `{children}` — ADR-0003 §21.1); `OverviewView.tsx` (новый); `app/markets/page.tsx` (новый, Server Component, Stocks переиспользует `WatchlistPanel` как есть); `InsightsHistoryPanel.tsx` + `app/insights/page.tsx` (новые — переиспользуют паттерн `InsightHistorySection`/`InsightSections`/`ModeToggle`, без форка большого дублирующего рендерера); `InstrumentDetailsView.tsx` (реструктурирован в grid-композицию — `PriceChartSection`/`InstrumentNewsSection`/`AiAnalysisSection`/`InsightHistorySection` не изменены внутри, только их расположение); `TradeJournalView.tsx` (точечно — тикер и `insight_id` стали реальными ссылками на `/instruments/{ticker}` и `/insights?open={id}`); полностью переписан `globals.css` — token-слой (`--background`/`--surface`/`--surface-elevated`/`--border`/`--text-primary`/`--text-secondary`/`--positive`/`--negative`/`--warning`/`--focus`), dark безусловно (не только `prefers-color-scheme`), без новой UI/chart-библиотеки (ADR-0003 §7 запрет соблюдён).
+
+Реально проверено: `pytest -v` → 401 passed, 32 skipped (было 391/31 — только новые тесты, без регрессий); `mypy src tests` → чисто (92 файла, без новых); `npm run type-check` → чисто; `npm run build` → чисто, все 6 маршрутов собраны (`/`, `/markets`, `/insights`, `/instruments/[ticker]`, `/journal`, `/_not-found`); `git diff --check` → чисто. Полная real-browser верификация через Playwright (реальные backend+frontend dev-серверы, реальная Compose PostgreSQL, реальный xAI live-вызов): Flow A (shell, активный пункт навигации, F5 на каждом маршруте) — пройден; Flow B (Markets: Акции работают, Forex/Crypto/Commodities честно заблокированы, 0 псевдо-форм) — пройден; Flow C (AAPL: котировка, график 1Д/5Д/1М, новости, AI-генерация вживую, краткий/полный режим, сохранение инсайта, история, 0 горизонтального overflow) — пройден; Flow D (кросс-тикерная История, newest-first, detail on demand, ссылка на инструмент) — пройден; Flow E (создание записи дневника, ссылка тикера, реципрокная ссылка Инсайт→Дневник→Инсайт через `?open=`, редактирование, отсутствие кнопки удаления) — пройден; Flow F (адаптивность 1440/820/390px, без overflow, nav остаётся видимой) — пройден; keyboard-focus (видимый `:focus-visible` outline, активный пункт nav не только цветом — жирный текст + underline) — пройден. Тестовые артефакты (2 инсайта AAPL, 2 записи дневника AAPL) остались в dev-базе — не могут быть удалены через приложение по дизайну (инсайты immutable, у дневника нет delete), тот же паттерн, что и в предыдущих задачах.
+
+## 4a. Предыдущая ревью-задача (теперь завершена)
+
+Phase 0 — Documentation & Architecture Decisions (ветка `docs/phase0-architecture-decisions`) — **завершена и смёржена в `main` через PR #46** (коммит `a2966c3`, merge-коммит `88d1dfb`). Отдельная задача ревью/финализации (упомянутая ниже) нашла и исправила 4 точечных документационных дефекта, затем изменения были закоммичены и, после решения Product Owner, интегрированы в `main` через pull request (прямой push в `main` был отклонён правилами репозитория — интеграция выполнена через PR, не локальным merge). **Только документация** — ни один файл `backend/`, `frontend/`, миграций, prompt/schema/evaluation-кода не изменён.
 
 Задаче предшествовал полный Product/Architecture Checkpoint (аналитическая задача без изменений репозитория) и последующее решение Product Owner, ратифицирующее шесть продуктовых направлений (PO-1–PO-6) с четырьмя явными уточнениями:
 
@@ -72,7 +87,7 @@ Phase 0 — Documentation & Architecture Decisions (ветка `docs/phase0-arch
 
 Отдельная задача ревью/финализации (после первичного создания документов Phase 0) выполнила сверку каждого изменённого/нового документа против `PROJECT_CHARTER.md`, `DOCUMENTATION_STANDARD.md`, `ADR_PROCESS.md` и связанных продуктовых/архитектурных документов; нашла и исправила 4 точечных документационных дефекта (опечатка, устаревшая формулировка ссылки на `ADR-0011`, неполный список связанных документов в `INFORMATION_ARCHITECTURE.md`, недостаточно однозначная формулировка раздела 9 настоящего файла); не нашла ни одного противоречия, требующего нового решения Product Owner. Изменения объединены в один коммит согласно `GIT_WORKFLOW.md` — push и merge не выполнялись (требуют отдельного разрешения).
 
-## 4a. Предыдущая ревью-задача (теперь завершена)
+## 4b. Предыдущая ревью-задача (теперь завершена)
 
 Short/Full Insight Mode Vertical Slice (ветка `feat/insight-short-full-mode`, PR #45, смёржен в `main`) — FR-021 (краткий инсайт), FR-022 (полный инсайт). **Только frontend** — ни один backend-файл не менялся, ни новой AI-генерации, ни нового endpoint'а.
 
@@ -85,7 +100,7 @@ Short/Full Insight Mode Vertical Slice (ветка `feat/insight-short-full-mode
 
 Реально проверено: `npm run type-check` → чисто; `npm run build` → чисто, маршруты не изменились; backend не менялся (`git diff --name-only -- backend/` пусто) — полный `pytest` не требовался; полная real-browser верификация (генерация → default «Кратко», 5 разделов → переключение «Подробно», все 9 заголовков (10 секций, confidence — один блок с двумя абзацами) → 5 переключений туда-обратно → 0 сетевых запросов → сохранение инсайта → открытие истории → default «Кратко» и там же → переключение «Подробно» → снова 0 запросов → disclaimer виден в обоих режимах → оценка/результат/ссылка «Добавить в дневник» продолжают работать → F5 → режим корректно сбрасывается к default → chart/news/watchlist не сломаны); тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**`/весь `backend/**` не изменены.
 
-## 4b. Предыдущая ревью-задача (теперь завершена)
+## 4c. Предыдущая ревью-задача (теперь завершена)
 
 Trade Journal Vertical Slice (ветка `feat/trade-journal`) — FR-030 (базовый дневник сделок), UJ-017 (создание записи, опционально со ссылкой на ранее сформированный инсайт).
 
@@ -99,7 +114,7 @@ Trade Journal Vertical Slice (ветка `feat/trade-journal`) — FR-030 (ба�
 
 Реально проверено: `pytest -v` → 391 passed, 31 skipped (без регрессий, было 344/23); `mypy src tests` → чисто (92 файла); `alembic current` → `0005_journal_entries (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл + FK-constraint подтверждены; AI-файлы не менялись — offline/live evaluation не запускались повторно (не требовалось, обосновано); полная real-browser верификация (Дневник-ссылка на главной → генерация+сохранение инсайта → «Добавить в дневник» → форма предзаполнена ticker+insight_id → создание записи → F5 → запись сохранилась → вторая независимая запись → редактирование → F5 → правка сохранилась, «(изменено)» показано → нет кнопки/эндпоинта удаления → watchlist/chart/news/AI/история инсайтов продолжают работать); тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4c. Ревью-задача до предыдущей (тоже завершена)
+## 4d. Ревью-задача до предыдущей (тоже завершена)
 
 Insight Evaluation & Outcome Tracking Vertical Slice (ветка `feat/insight-evaluation`) — закрывает последний шаг канонического MVP-сценария (`PRODUCT_SCOPE.md` §21: «...сформировать инсайт → увидеть источники → сохранить → **оценить**»): FR-035 (пользовательская оценка сохранённого инсайта), FR-036/FR-038 (ручная фиксация результата, неразрывно связанная с исходным инсайтом).
 
@@ -115,7 +130,7 @@ Insight Evaluation & Outcome Tracking Vertical Slice (ветка `feat/insight-e
 
 Реально проверено: `pytest -v` → 344 passed, 23 skipped (без регрессий, было 309/18); `mypy src tests` → чисто (85 файлов); `alembic current` → `0004_insight_evaluations (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл + FK-constraint подтверждены; AI-файлы не менялись — offline/live evaluation не запускались повторно (не требовалось, обосновано); полная real-browser верификация (generate → save → history → evaluate → F5 → оценка сохранилась → outcome → F5 → результат сохранился → provenance/содержимое исходного инсайта не изменились → вторая независимая запись без унаследованной оценки/результата → watchlist/chart/news/search продолжают работать), включая honest recovery от двух реальных Twelve Data rate-limit окон; тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4d. Более ранняя ревью-задача (тоже завершена)
+## 4e. Более ранняя ревью-задача (тоже завершена)
 
 Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insight-persistence`) — доводит существующий Instrument AI Analysis до обязательных MVP-требований: FR-018 (10 обязательных секций insight), FR-019 (явный категориальный confidence), FR-034 (persistence + история инсайтов), FR-011 (минимальный source attribution ключевых фактов), ADR-0004/ADR-0007 provenance requirements.
 
@@ -131,7 +146,7 @@ Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insi
 
 Реально проверено: `pytest -v` → 309 passed, 18 skipped (без регрессий); `mypy src tests` → чисто (72 файла); `alembic current` → `0003_insights (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл подтверждён, `watchlist_items` не тронута; offline evaluation → 12/12, 0 violations; live evaluation (opt-in) → 3/3, 0 violations; полная real-browser верификация (generate → структура/confidence → save → F5 → история сохраняется → detail с provenance → вторая генерация/сохранение → newest-first → chart/news/search/watchlist продолжают работать), тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4e. Ещё более ранняя ревью-задача (тоже завершена)
+## 4f. Ещё более ранняя ревью-задача (тоже завершена)
 
 AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) — первый, намеренно небольшой, воспроизводимый evaluation harness для уже существующего `GenerateInstrumentAnalysis` (ADR-0007 §52 явно требует evaluation dataset до дальнейшего расширения production-использования модели). **Не пользовательская фича** — frontend не менялся вообще, ничего не выполняется в браузере, ничего не вызывает market/news provider:
 
@@ -214,17 +229,17 @@ AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) �
 
 ## 7. Последняя завершённая задача
 
-Short/Full Insight Mode Vertical Slice (PR #45) — завершён и смёржен в `main`. После этого проведён отдельный, не связанный с кодом Product/Architecture Checkpoint (аналитическая задача), по итогам которого Product Owner ратифицировал PO-1–PO-6 (раздел 4).
+Phase 0 — Documentation & Architecture Decisions (PR #46) — завершена и смёржена в `main` (раздел 4a).
 
 ## 8. Текущая задача
 
-Phase 0 — Documentation & Architecture Decisions (ветка `docs/phase0-architecture-decisions`) — на ревью (раздел 4). Реализация Phase 1 явно не начата по прямому указанию Product Owner.
+Phase 1 — Application Shell & Intelligence Workspace (ветка `feature/phase1-workspace-shell`) — реализовано и провалидировано, на ревью, **намеренно не закоммичено** (раздел 4). Ожидает ручной проверки точного набора файлов Product Owner перед commit согласно `GIT_WORKFLOW.md`.
 
 ## 9. Следующий планируемый блок
 
-**Не определён.** Phase 1 implementation package — предмет отдельного, ещё не принятого решения Product Owner после ревью Phase 0 (раздел 4). Настоящий документ не называет и не подразумевает ни один конкретный следующий пакет как одобренный или приоритетный.
+**Не определён.** Продолжение работы над продуктом (включая возможную задачу Notes, реальное исследование провайдеров для `ADR-0011`, либо иной пакет) — предмет отдельного, ещё не принятого решения Product Owner после ревью и commit/merge Phase 1 (раздел 4). Настоящий документ не называет и не подразумевает ни один конкретный следующий пакет как одобренный или приоритетный.
 
-Справочно, без ранжирования и без статуса решения: FR-032 (Notes), FR-003/FR-004 (навигация Markets/Overview) и IA §2.4 (Insights/History) — MVP-требования, помеченные `INFORMATION_ARCHITECTURE.md` как «недостающее», к реализации ни одного из них разрешение не выдано. Реальное исследование провайдеров для `ADR-0011` также не запланировано этой записью как часть Phase 1 — отдельное решение Product Owner о привлечении Solution Architect. MVP в целом не считается завершённым.
+Справочно, без ранжирования и без статуса решения: Settings и Notes CRUD остаются неутверждёнными для реализации (сознательно исключены из объёма Phase 1, раздел 4) и по-прежнему отсутствуют в навигации приложения, что соответствует `INFORMATION_ARCHITECTURE.md`. Реальное исследование провайдеров для `ADR-0011` не запланировано этой записью — отдельное решение Product Owner о привлечении Solution Architect. MVP в целом не считается завершённым.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 

@@ -15,7 +15,12 @@ from trading_ai.insights.domain import (
     PendingAnalysisNotFoundError,
     SavedInsight,
 )
-from trading_ai.insights.use_cases import GetInsightDetail, ListInstrumentInsights, SaveInsight
+from trading_ai.insights.use_cases import (
+    GetInsightDetail,
+    ListInstrumentInsights,
+    ListRecentInsights,
+    SaveInsight,
+)
 from trading_ai.watchlist.domain import InvalidTickerError
 
 _T = datetime(2026, 3, 2, 14, 30, tzinfo=timezone.utc)
@@ -91,6 +96,13 @@ class FakeInsightRepository:
 
     async def get_by_id(self, insight_id: int) -> SavedInsight | None:
         return self._by_id.get(insight_id)
+
+    async def list_recent(self, limit: int) -> list[SavedInsight]:
+        """Newest-first (highest id first) across all tickers, bounded —
+        mirrors `InsightRepository.list_recent`'s `ORDER BY created_at
+        DESC, id DESC` for this in-memory fake (Phase 1)."""
+        ordered = sorted(self._by_id.values(), key=lambda item: item.id, reverse=True)
+        return ordered[:limit]
 
 
 @pytest.mark.anyio
@@ -221,9 +233,62 @@ async def test_get_insight_detail_missing_raises() -> None:
         await use_case.execute(999)
 
 
-def _new_insight_stub() -> NewInsight:
+@pytest.mark.anyio
+async def test_list_recent_insights_returns_newest_first_across_tickers() -> None:
+    repository = FakeInsightRepository()
+    await repository.add(_new_insight_stub(ticker="AAPL"))
+    await repository.add(_new_insight_stub(ticker="MSFT"))
+    use_case = ListRecentInsights(repository)
+
+    results = await use_case.execute(limit=10)
+
+    assert [item.ticker for item in results] == ["MSFT", "AAPL"]
+
+
+@pytest.mark.anyio
+async def test_list_recent_insights_respects_limit() -> None:
+    repository = FakeInsightRepository()
+    await repository.add(_new_insight_stub(ticker="AAPL"))
+    await repository.add(_new_insight_stub(ticker="MSFT"))
+    await repository.add(_new_insight_stub(ticker="GOOG"))
+    use_case = ListRecentInsights(repository)
+
+    results = await use_case.execute(limit=2)
+
+    assert len(results) == 2
+    assert [item.ticker for item in results] == ["GOOG", "MSFT"]
+
+
+@pytest.mark.anyio
+async def test_list_recent_insights_empty_result() -> None:
+    repository = FakeInsightRepository()
+    use_case = ListRecentInsights(repository)
+
+    results = await use_case.execute()
+
+    assert results == []
+
+
+@pytest.mark.anyio
+async def test_list_recent_insights_default_limit_is_max_history_items() -> None:
+    """No explicit `limit` argument must still bound the result the same
+    way the per-ticker use case does (task scope: bounded, no
+    infinite-scroll pagination)."""
+    from trading_ai.insights.domain import MAX_HISTORY_ITEMS
+
+    repository = FakeInsightRepository()
+    for _ in range(MAX_HISTORY_ITEMS + 5):
+        await repository.add(_new_insight_stub())
+    use_case = ListRecentInsights(repository)
+
+    results = await use_case.execute()
+
+    assert len(results) == MAX_HISTORY_ITEMS
+
+
+def _new_insight_stub(ticker: str = "AAPL") -> NewInsight:
     return NewInsight(
-        ticker="AAPL",
+        ticker=ticker,
         generated_at=_T,
         summary="s",
         price_context="p",
