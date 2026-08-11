@@ -963,6 +963,52 @@ h2 {
   gap: 1rem;
 }
 
+/* Short/full insight mode toggle (FR-021/FR-022) — presentation-only,
+   shared between current-generation and saved-insight-history views
+   (`InsightSections.tsx`). Semantic buttons, not div-onClick, so
+   keyboard activation and focus-visible work without extra plumbing. */
+
+.insight-mode-toggle {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.insight-mode-button,
+.insight-mode-button-selected {
+  border: 1px solid #ccc;
+  border-radius: 999px;
+  background: transparent;
+  padding: 0.3rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.insight-mode-button-selected {
+  border-color: #1a5fb4;
+  background: #e8f0fc;
+  color: #0d3d80;
+  font-weight: 600;
+}
+
+.insight-mode-button:focus-visible,
+.insight-mode-button-selected:focus-visible {
+  outline: 2px solid #1a5fb4;
+  outline-offset: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .insight-mode-button {
+    border-color: #555;
+    color: inherit;
+  }
+
+  .insight-mode-button-selected {
+    border-color: #5b9bf0;
+    background: #16283f;
+    color: #a9cdf7;
+  }
+}
+
 .ai-analysis-block h3 {
   font-size: 0.85rem;
   text-transform: uppercase;

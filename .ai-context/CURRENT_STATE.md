@@ -53,6 +53,19 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
+Short/Full Insight Mode Vertical Slice (ветка `feat/insight-short-full-mode`) — FR-021 (краткий инсайт), FR-022 (полный инсайт). **Только frontend** — ни один backend-файл не менялся, ни новой AI-генерации, ни нового endpoint'а.
+
+- **Product Owner decisions (через AskUserQuestion, не решено самостоятельно)**: состав краткого режима — **сбалансированный, 5 из 10 разделов FR-018** (Краткий вывод, Ключевые факты, Уровень уверенности, Что можно рассмотреть, Основные риски); default-режим — **«Кратко»**;
+- Presentation-only toggle поверх уже полученного structured результата — **0 HTTP-запросов** при переключении (проверено вживую через network log: 5 переключений подряд → 0 запросов), не вызывает xAI/backend/market/news повторно, не создаёт новый инсайт, не трогает evaluation/outcome;
+- Новый общий компонент `frontend/src/components/InsightSections.tsx` (`InsightSections` + `ModeToggle`) переиспользован и в `AiAnalysisSection` (текущая генерация), и в `InsightHistorySection` (сохранённый инсайт) — устраняет дублирование разметки и закрывает найденный по ходу задачи пробел: раньше `InsightHistorySection` не показывала `summary`/`price_context`/`news_context` внутри развёрнутой карточки вообще — теперь оба места показывают идентичную полную структуру в full-режиме;
+- Режим — локальный React state (`ADR-0003-frontend-stack.md` §23 уже относил короткий/полный режим к локальному UI-состоянию до этой задачи) — не persist, сбрасывается к default на `F5`; никакого Redux/Zustand/context/localStorage;
+- Disclaimer виден в обоих режимах всегда, независимо от toggle; ни один факт/источник (FR-011) не теряется в кратком виде — «Ключевые факты» входят в оба режима целиком, без обрезки текста;
+- Не добавлено: новый backend endpoint, DB table, migration, prompt, schema version, model change, второй generation mode, streaming, localStorage preferences, settings, market navigation, notes, horizon, Forex/Crypto.
+
+Реально проверено: `npm run type-check` → чисто; `npm run build` → чисто, маршруты не изменились; backend не менялся (`git diff --name-only -- backend/` пусто) — полный `pytest` не требовался; полная real-browser верификация (генерация → default «Кратко», 5 разделов → переключение «Подробно», все 9 заголовков (10 секций, confidence — один блок с двумя абзацами) → 5 переключений туда-обратно → 0 сетевых запросов → сохранение инсайта → открытие истории → default «Кратко» и там же → переключение «Подробно» → снова 0 запросов → disclaimer виден в обоих режимах → оценка/результат/ссылка «Добавить в дневник» продолжают работать → F5 → режим корректно сбрасывается к default → chart/news/watchlist не сломаны); тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**`/весь `backend/**` не изменены.
+
+## 4a. Предыдущая ревью-задача (теперь завершена)
+
 Trade Journal Vertical Slice (ветка `feat/trade-journal`) — FR-030 (базовый дневник сделок), UJ-017 (создание записи, опционально со ссылкой на ранее сформированный инсайт).
 
 - **Product Owner decisions (через AskUserQuestion, не решено самостоятельно)**: mutability — **editable, no delete** (запись можно скорректировать, `updated_at` фиксирует факт правки; delete-эндпоинта/UI нет, soft-delete не вводится); формат результата — **категориальный статус + опциональный текст** (`TradeResultStatus`: `profit`/`loss`/`breakeven`/`open`, 4 значения — «open» добавлен отдельным явным вопросом Product Owner, т.к. документы не задавали конкретные значения); формат направления — **категориальный enum** `TradeDirection` (`long`/`short`);
@@ -65,7 +78,7 @@ Trade Journal Vertical Slice (ветка `feat/trade-journal`) — FR-030 (ба�
 
 Реально проверено: `pytest -v` → 391 passed, 31 skipped (без регрессий, было 344/23); `mypy src tests` → чисто (92 файла); `alembic current` → `0005_journal_entries (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл + FK-constraint подтверждены; AI-файлы не менялись — offline/live evaluation не запускались повторно (не требовалось, обосновано); полная real-browser верификация (Дневник-ссылка на главной → генерация+сохранение инсайта → «Добавить в дневник» → форма предзаполнена ticker+insight_id → создание записи → F5 → запись сохранилась → вторая независимая запись → редактирование → F5 → правка сохранилась, «(изменено)» показано → нет кнопки/эндпоинта удаления → watchlist/chart/news/AI/история инсайтов продолжают работать); тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4a. Предыдущая ревью-задача (теперь завершена)
+## 4b. Ревью-задача до предыдущей (тоже завершена)
 
 Insight Evaluation & Outcome Tracking Vertical Slice (ветка `feat/insight-evaluation`) — закрывает последний шаг канонического MVP-сценария (`PRODUCT_SCOPE.md` §21: «...сформировать инсайт → увидеть источники → сохранить → **оценить**»): FR-035 (пользовательская оценка сохранённого инсайта), FR-036/FR-038 (ручная фиксация результата, неразрывно связанная с исходным инсайтом).
 
@@ -81,7 +94,7 @@ Insight Evaluation & Outcome Tracking Vertical Slice (ветка `feat/insight-e
 
 Реально проверено: `pytest -v` → 344 passed, 23 skipped (без регрессий, было 309/18); `mypy src tests` → чисто (85 файлов); `alembic current` → `0004_insight_evaluations (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл + FK-constraint подтверждены; AI-файлы не менялись — offline/live evaluation не запускались повторно (не требовалось, обосновано); полная real-browser верификация (generate → save → history → evaluate → F5 → оценка сохранилась → outcome → F5 → результат сохранился → provenance/содержимое исходного инсайта не изменились → вторая независимая запись без унаследованной оценки/результата → watchlist/chart/news/search продолжают работать), включая honest recovery от двух реальных Twelve Data rate-limit окон; тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4b. Ревью-задача до предыдущей (тоже завершена)
+## 4c. Более ранняя ревью-задача (тоже завершена)
 
 Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insight-persistence`) — доводит существующий Instrument AI Analysis до обязательных MVP-требований: FR-018 (10 обязательных секций insight), FR-019 (явный категориальный confidence), FR-034 (persistence + история инсайтов), FR-011 (минимальный source attribution ключевых фактов), ADR-0004/ADR-0007 provenance requirements.
 
@@ -97,7 +110,7 @@ Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insi
 
 Реально проверено: `pytest -v` → 309 passed, 18 skipped (без регрессий); `mypy src tests` → чисто (72 файла); `alembic current` → `0003_insights (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл подтверждён, `watchlist_items` не тронута; offline evaluation → 12/12, 0 violations; live evaluation (opt-in) → 3/3, 0 violations; полная real-browser верификация (generate → структура/confidence → save → F5 → история сохраняется → detail с provenance → вторая генерация/сохранение → newest-first → chart/news/search/watchlist продолжают работать), тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4c. Более ранняя ревью-задача (тоже завершена)
+## 4d. Ещё более ранняя ревью-задача (тоже завершена)
 
 AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) — первый, намеренно небольшой, воспроизводимый evaluation harness для уже существующего `GenerateInstrumentAnalysis` (ADR-0007 §52 явно требует evaluation dataset до дальнейшего расширения production-использования модели). **Не пользовательская фича** — frontend не менялся вообще, ничего не выполняется в браузере, ничего не вызывает market/news provider:
 
@@ -180,15 +193,15 @@ AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) �
 
 ## 7. Последняя завершённая задача
 
-Insight Evaluation & Outcome Tracking Vertical Slice — завершён.
+Trade Journal Vertical Slice — завершён.
 
 ## 8. Текущая задача
 
-Trade Journal Vertical Slice — на ревью.
+Short/Full Insight Mode Vertical Slice — на ревью.
 
 ## 9. Следующий планируемый блок
 
-Следующий продуктовый vertical slice определяется по roadmap/FUNCTIONAL_REQUIREMENTS.md после ревью Trade Journal Vertical Slice — вероятные кандидаты (не предрешено этой записью): Personal Notes (FR-032), базовая навигация по рыночным разделам (FR-003/004). MVP в целом не считается завершённым.
+Следующий продуктовый vertical slice определяется по roadmap/FUNCTIONAL_REQUIREMENTS.md после ревью Short/Full Insight Mode Vertical Slice — вероятные кандидаты (не предрешено этой записью): Personal Notes (FR-032), базовая навигация по рыночным разделам (FR-003/004). MVP в целом не считается завершённым.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 

@@ -15,6 +15,7 @@ import {
   type InsightSummary,
   type InstrumentConfidenceLevel,
 } from "@/lib/instrument-api";
+import InsightSections, { ModeToggle, type InsightViewMode } from "@/components/InsightSections";
 
 type HistoryState =
   | { status: "loading" }
@@ -78,6 +79,9 @@ export default function InsightHistorySection({
   // Expandable per-item detail — fetched lazily on "Открыть", not
   // embedded in the (compact) list response (task scope §14).
   const [expanded, setExpanded] = useState<Record<number, DetailState>>({});
+  // FR-021/022 — same presentation-only semantics as `AiAnalysisSection`
+  // (task scope §7): default "Кратко" per item, local UI state only.
+  const [modes, setModes] = useState<Record<number, InsightViewMode>>({});
   const [evaluations, setEvaluations] = useState<Record<number, EvaluationState>>({});
   const [ratingPending, setRatingPending] = useState<Record<number, boolean>>({});
   const [outcomeDrafts, setOutcomeDrafts] = useState<Record<number, string>>({});
@@ -87,6 +91,7 @@ export default function InsightHistorySection({
   const load = useCallback(() => {
     setState({ status: "loading" });
     setExpanded({});
+    setModes({});
     setEvaluations({});
     getInstrumentInsights(ticker)
       .then((data) => setState({ status: "loaded", items: data.items }))
@@ -140,9 +145,15 @@ export default function InsightHistorySection({
         delete next[id];
         return next;
       });
+      setModes((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
       return;
     }
     setExpanded((prev) => ({ ...prev, [id]: { status: "loading" } }));
+    setModes((prev) => ({ ...prev, [id]: "short" }));
     getInsightDetail(id)
       .then((data) => setExpanded((prev) => ({ ...prev, [id]: { status: "loaded", data } })))
       .catch((error: unknown) => {
@@ -216,6 +227,7 @@ export default function InsightHistorySection({
           <ul className="insight-history-list">
             {state.items.map((item) => {
               const detail = expanded[item.id];
+              const mode = modes[item.id] ?? "short";
               const evaluation = evaluations[item.id];
               const isRatingPending = ratingPending[item.id] === true;
               const isOutcomePending = outcomePending[item.id] === true;
@@ -248,49 +260,11 @@ export default function InsightHistorySection({
 
                   {detail && detail.status === "loaded" && (
                     <div className="insight-history-detail">
-                      <p>
-                        <strong>Ключевые факты:</strong>
-                      </p>
-                      <ul>
-                        {detail.data.key_facts.map((fact, index) => (
-                          <li key={index}>
-                            {fact.fact} <em>({fact.source})</em>
-                          </li>
-                        ))}
-                      </ul>
-                      <p>
-                        <strong>Инсайт / гипотеза:</strong> {detail.data.insight_hypothesis}
-                      </p>
-                      <p>
-                        <strong>Обоснование уверенности:</strong> {detail.data.confidence_reason}
-                      </p>
-                      <p>
-                        <strong>Что можно рассмотреть:</strong>
-                      </p>
-                      <ul>
-                        {detail.data.considerations.map((item, index) => (
-                          <li key={index}>{item}</li>
-                        ))}
-                      </ul>
-                      <p>
-                        <strong>Риски:</strong>
-                      </p>
-                      <ul>
-                        {detail.data.risks.map((risk, index) => (
-                          <li key={index}>{risk}</li>
-                        ))}
-                      </ul>
-                      <p>
-                        <strong>Что сильнее всего повлияло на вывод:</strong>
-                      </p>
-                      <ul>
-                        {detail.data.key_drivers.map((driver, index) => (
-                          <li key={index}>{driver}</li>
-                        ))}
-                      </ul>
-                      <p>
-                        <strong>Актуальность данных:</strong> {detail.data.data_freshness}
-                      </p>
+                      <ModeToggle
+                        mode={mode}
+                        onChange={(nextMode) => setModes((prev) => ({ ...prev, [item.id]: nextMode }))}
+                      />
+                      <InsightSections data={detail.data} mode={mode} />
                       <p className="insight-history-detail-provenance">
                         {detail.data.provider} / {detail.data.model} · prompt{" "}
                         {detail.data.prompt_version} · schema {detail.data.schema_version}
