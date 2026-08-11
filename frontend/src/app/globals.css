@@ -1239,3 +1239,142 @@ h2 {
     color: #aaa;
   }
 }
+
+/* Insight evaluation / manual outcome (FR-035, FR-036, FR-038) */
+
+.insight-evaluation,
+.insight-outcome {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed #ccc;
+}
+
+@media (prefers-color-scheme: dark) {
+  .insight-evaluation,
+  .insight-outcome {
+    border-top-color: #444;
+  }
+}
+
+.insight-evaluation h3,
+.insight-outcome h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.insight-evaluation-loading {
+  color: #666;
+  font-style: italic;
+  font-size: 0.85rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .insight-evaluation-loading {
+    color: #aaa;
+  }
+}
+
+.insight-evaluation-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  color: #b00020;
+  font-size: 0.85rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .insight-evaluation-error {
+    color: #ff6b6b;
+  }
+}
+
+.insight-evaluation-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.insight-evaluation-rating,
+.insight-evaluation-rating-selected {
+  border: 1px solid #ccc;
+  border-radius: 999px;
+  background: transparent;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.insight-evaluation-rating-selected {
+  border-color: #2f7a3d;
+  background: #e6f4ea;
+  color: #1e5128;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .insight-evaluation-rating {
+    border-color: #555;
+    color: inherit;
+  }
+
+  .insight-evaluation-rating-selected {
+    border-color: #4caf6a;
+    background: #1c3a24;
+    color: #8fe0a8;
+  }
+}
+
+.insight-evaluation-saved {
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+@media (prefers-color-scheme: dark) {
+  .insight-evaluation-saved {
+    color: #aaa;
+  }
+}
+
+.insight-outcome-recorded {
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+
+.insight-outcome-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 32rem;
+}
+
+.insight-outcome-form textarea {
+  min-height: 4rem;
+  padding: 0.4rem 0.6rem;
+  font-family: inherit;
+  font-size: 0.85rem;
+  border: 1px solid #ccc;
+  border-radius: 0.25rem;
+  resize: vertical;
+}
+
+@media (prefers-color-scheme: dark) {
+  .insight-outcome-form textarea {
+    border-color: #555;
+    background: #1a1a1a;
+    color: inherit;
+  }
+}
+
+.insight-outcome-error {
+  color: #b00020;
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .insight-outcome-error {
+    color: #ff6b6b;
+  }
+}

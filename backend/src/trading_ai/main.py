@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from trading_ai.ai.gateway import XAIGateway
 from trading_ai.ai.pending_cache import PendingAnalysisCache
+from trading_ai.api.routes.evaluations import register_evaluation_exception_handlers
+from trading_ai.api.routes.evaluations import router as evaluations_router
 from trading_ai.api.routes.health import router as health_router
 from trading_ai.api.routes.instruments import register_ai_analysis_exception_handlers
 from trading_ai.api.routes.instruments import register_insight_exception_handlers
@@ -124,17 +126,19 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=list(settings.cors_origins),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["Content-Type"],
     )
     app.include_router(health_router)
     app.include_router(ready_router)
     app.include_router(watchlist_router)
     app.include_router(instruments_router)
+    app.include_router(evaluations_router)
     register_watchlist_exception_handlers(app)
     register_instruments_exception_handlers(app)
     register_ai_analysis_exception_handlers(app)
     register_insight_exception_handlers(app)
+    register_evaluation_exception_handlers(app)
     return app
 
 

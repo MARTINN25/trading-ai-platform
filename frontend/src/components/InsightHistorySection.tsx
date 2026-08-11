@@ -2,10 +2,15 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  evaluateInsight,
   getInsightDetail,
+  getInsightEvaluation,
   getInstrumentInsights,
+  recordInsightOutcome,
   InstrumentApiError,
   type InsightDetail,
+  type InsightEvaluation,
+  type InsightRating,
   type InsightSummary,
   type InstrumentConfidenceLevel,
 } from "@/lib/instrument-api";
@@ -18,6 +23,17 @@ type HistoryState =
 type DetailState =
   | { status: "loading" }
   | { status: "loaded"; data: InsightDetail }
+  | { status: "error"; message: string };
+
+/**
+ * Distinct from `DetailState`'s "error" — a `404` here almost always
+ * means "never evaluated yet" (see `getInsightEvaluation`'s own
+ * docstring), which is a normal, expected state, not a failure.
+ */
+type EvaluationState =
+  | { status: "loading" }
+  | { status: "not_evaluated" }
+  | { status: "loaded"; data: InsightEvaluation }
   | { status: "error"; message: string };
 
 const timestampFormatter = new Intl.DateTimeFormat("ru-RU", {
@@ -39,6 +55,14 @@ const CONFIDENCE_LABELS: Record<InstrumentConfidenceLevel, string> = {
   low: "Низкая",
 };
 
+const RATING_LABELS: Record<InsightRating, string> = {
+  useful: "Полезен",
+  partially_useful: "Частично полезен",
+  not_useful: "Не полезен",
+};
+
+const RATING_ORDER: InsightRating[] = ["useful", "partially_useful", "not_useful"];
+
 export default function InsightHistorySection({
   ticker,
   refreshKey,
@@ -53,10 +77,16 @@ export default function InsightHistorySection({
   // Expandable per-item detail — fetched lazily on "Открыть", not
   // embedded in the (compact) list response (task scope §14).
   const [expanded, setExpanded] = useState<Record<number, DetailState>>({});
+  const [evaluations, setEvaluations] = useState<Record<number, EvaluationState>>({});
+  const [ratingPending, setRatingPending] = useState<Record<number, boolean>>({});
+  const [outcomeDrafts, setOutcomeDrafts] = useState<Record<number, string>>({});
+  const [outcomePending, setOutcomePending] = useState<Record<number, boolean>>({});
+  const [outcomeErrors, setOutcomeErrors] = useState<Record<number, string | null>>({});
 
   const load = useCallback(() => {
     setState({ status: "loading" });
     setExpanded({});
+    setEvaluations({});
     getInstrumentInsights(ticker)
       .then((data) => setState({ status: "loaded", items: data.items }))
       .catch((error: unknown) => {
@@ -72,9 +102,39 @@ export default function InsightHistorySection({
     load();
   }, [load, refreshKey]);
 
+  function loadEvaluation(id: number): void {
+    setEvaluations((prev) => ({ ...prev, [id]: { status: "loading" } }));
+    getInsightEvaluation(id)
+      .then((data) => setEvaluations((prev) => ({ ...prev, [id]: { status: "loaded", data } })))
+      .catch((error: unknown) => {
+        if (error instanceof InstrumentApiError && error.kind === "not-found") {
+          setEvaluations((prev) => ({ ...prev, [id]: { status: "not_evaluated" } }));
+          return;
+        }
+        const message =
+          error instanceof InstrumentApiError ? error.message : "Не удалось загрузить оценку.";
+        setEvaluations((prev) => ({ ...prev, [id]: { status: "error", message } }));
+      });
+  }
+
   function toggleExpand(id: number): void {
     if (expanded[id]) {
       setExpanded((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setEvaluations((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setOutcomeDrafts((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setOutcomeErrors((prev) => {
         const next = { ...prev };
         delete next[id];
         return next;
@@ -89,6 +149,40 @@ export default function InsightHistorySection({
           error instanceof InstrumentApiError ? error.message : "Не удалось загрузить инсайт.";
         setExpanded((prev) => ({ ...prev, [id]: { status: "error", message } }));
       });
+    loadEvaluation(id);
+  }
+
+  function handleRate(id: number, rating: InsightRating): void {
+    setRatingPending((prev) => ({ ...prev, [id]: true }));
+    evaluateInsight(id, rating)
+      .then((data) => setEvaluations((prev) => ({ ...prev, [id]: { status: "loaded", data } })))
+      .catch((error: unknown) => {
+        const message =
+          error instanceof InstrumentApiError ? error.message : "Не удалось сохранить оценку.";
+        setEvaluations((prev) => ({ ...prev, [id]: { status: "error", message } }));
+      })
+      .finally(() => setRatingPending((prev) => ({ ...prev, [id]: false })));
+  }
+
+  function handleOutcomeSubmit(id: number): void {
+    const note = (outcomeDrafts[id] ?? "").trim();
+    if (!note) {
+      setOutcomeErrors((prev) => ({ ...prev, [id]: "Введите результат перед сохранением." }));
+      return;
+    }
+    setOutcomeErrors((prev) => ({ ...prev, [id]: null }));
+    setOutcomePending((prev) => ({ ...prev, [id]: true }));
+    recordInsightOutcome(id, note)
+      .then((data) => {
+        setEvaluations((prev) => ({ ...prev, [id]: { status: "loaded", data } }));
+        setOutcomeDrafts((prev) => ({ ...prev, [id]: "" }));
+      })
+      .catch((error: unknown) => {
+        const message =
+          error instanceof InstrumentApiError ? error.message : "Не удалось зафиксировать результат.";
+        setOutcomeErrors((prev) => ({ ...prev, [id]: message }));
+      })
+      .finally(() => setOutcomePending((prev) => ({ ...prev, [id]: false })));
   }
 
   return (
@@ -121,6 +215,11 @@ export default function InsightHistorySection({
           <ul className="insight-history-list">
             {state.items.map((item) => {
               const detail = expanded[item.id];
+              const evaluation = evaluations[item.id];
+              const isRatingPending = ratingPending[item.id] === true;
+              const isOutcomePending = outcomePending[item.id] === true;
+              const outcomeError = outcomeErrors[item.id];
+              const outcomeDraft = outcomeDrafts[item.id] ?? "";
               return (
                 <li key={item.id} className="insight-history-item">
                   <p className="insight-history-item-meta">
@@ -196,6 +295,96 @@ export default function InsightHistorySection({
                         {detail.data.prompt_version} · schema {detail.data.schema_version}
                       </p>
                       <p className="insight-history-detail-disclaimer">{detail.data.disclaimer}</p>
+
+                      <div className="insight-evaluation">
+                        <h3>Оценка инсайта</h3>
+                        {(!evaluation || evaluation.status === "loading") && (
+                          <p className="insight-evaluation-loading">Загрузка оценки…</p>
+                        )}
+                        {evaluation && evaluation.status === "error" && (
+                          <div className="insight-evaluation-error" role="alert">
+                            <p>{evaluation.message}</p>
+                            <button type="button" onClick={() => loadEvaluation(item.id)}>
+                              Повторить
+                            </button>
+                          </div>
+                        )}
+                        {evaluation &&
+                          (evaluation.status === "loaded" || evaluation.status === "not_evaluated") && (
+                            <>
+                              <div className="insight-evaluation-buttons" role="group" aria-label="Оценка инсайта">
+                                {RATING_ORDER.map((ratingValue) => {
+                                  const currentRating =
+                                    evaluation.status === "loaded" ? evaluation.data.rating : null;
+                                  const isSelected = currentRating === ratingValue;
+                                  return (
+                                    <button
+                                      key={ratingValue}
+                                      type="button"
+                                      disabled={isRatingPending}
+                                      aria-pressed={isSelected}
+                                      className={
+                                        isSelected
+                                          ? "insight-evaluation-rating-selected"
+                                          : "insight-evaluation-rating"
+                                      }
+                                      onClick={() => handleRate(item.id, ratingValue)}
+                                    >
+                                      {RATING_LABELS[ratingValue]}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              {evaluation.status === "loaded" && evaluation.data.rating !== null && (
+                                <p className="insight-evaluation-saved">
+                                  Оценка сохранена: {RATING_LABELS[evaluation.data.rating]}.
+                                </p>
+                              )}
+                            </>
+                          )}
+                      </div>
+
+                      <div className="insight-outcome">
+                        <h3>Результат</h3>
+                        {evaluation &&
+                          evaluation.status === "loaded" &&
+                          evaluation.data.outcome_note !== null &&
+                          evaluation.data.outcome_recorded_at !== null && (
+                            <p className="insight-outcome-recorded">
+                              {formatTimestamp(evaluation.data.outcome_recorded_at)}:{" "}
+                              {evaluation.data.outcome_note}
+                            </p>
+                          )}
+                        {evaluation && (evaluation.status === "loaded" || evaluation.status === "not_evaluated") && (
+                          <div className="insight-outcome-form">
+                            <textarea
+                              aria-label="Результат по инсайту"
+                              placeholder="Что произошло по факту? Например: цена выросла на 3%, инсайт подтвердился."
+                              value={outcomeDraft}
+                              disabled={isOutcomePending}
+                              onChange={(event) =>
+                                setOutcomeDrafts((prev) => ({ ...prev, [item.id]: event.target.value }))
+                              }
+                            />
+                            {outcomeError && (
+                              <p className="insight-outcome-error" role="alert">
+                                {outcomeError}
+                              </p>
+                            )}
+                            <button
+                              type="button"
+                              disabled={isOutcomePending}
+                              onClick={() => handleOutcomeSubmit(item.id)}
+                            >
+                              {isOutcomePending
+                                ? "Сохранение…"
+                                : evaluation.status === "loaded" && evaluation.data.outcome_note !== null
+                                  ? "Обновить результат"
+                                  : "Зафиксировать результат"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </li>
