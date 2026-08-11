@@ -2,7 +2,7 @@
 
 **Статус:** Утверждён
 **Владелец:** Product Owner
-**Дата последнего изменения:** 2026-08-10
+**Дата последнего изменения:** 2026-08-11
 **Назначение:** предоставить AI-агентам краткий актуальный контекст перед началом задачи.
 
 Это оперативный, не архитектурный источник состояния (см. `docs/processes/DOCUMENTATION_STANDARD.md`, раздел 3). При расхождении с `PROJECT_CHARTER.md` или утверждёнными ADR приоритет имеют они.
@@ -53,7 +53,28 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
-Short/Full Insight Mode Vertical Slice (ветка `feat/insight-short-full-mode`) — FR-021 (краткий инсайт), FR-022 (полный инсайт). **Только frontend** — ни один backend-файл не менялся, ни новой AI-генерации, ни нового endpoint'а.
+Phase 0 — Documentation & Architecture Decisions (ветка `docs/phase0-architecture-decisions`). **Только документация** — ни один файл `backend/`, `frontend/`, миграций, prompt/schema/evaluation-кода не изменён.
+
+Задаче предшествовал полный Product/Architecture Checkpoint (аналитическая задача без изменений репозитория) и последующее решение Product Owner, ратифицирующее шесть продуктовых направлений (PO-1–PO-6) с четырьмя явными уточнениями:
+
+- **PO-1** — согласована связная информационная архитектура из 8 концептуальных областей (Market/Overview, Markets, Instrument Workspace, Insights/History, News/Events, Journal, Notes, Settings) — зафиксировано новым документом `docs/architecture/INFORMATION_ARCHITECTURE.md`;
+- **PO-2** — согласована стратегия единой оценки провайдеров данных для рынков Акции/Forex/Криптовалюта/Сырьё, приоритет — Forex; **конкретный провайдер не выбран** — рамка из 15 критериев зафиксирована `TECHNOLOGY_EVALUATION.md`, раздел 14; черновик `ADR-0011` создан в статусе «Черновик», разделы «Рассмотренные варианты»/«Выбранное решение» намеренно не заполнены (реальное исследование Solution Architect не проводилось — не изобретено ни одного факта о провайдерах);
+- **PO-3** — утверждены только сами значения горизонта анализа SHORT/MEDIUM/LONG (FR-006, UJ-005); **точные временные диапазоны и минимальное окно данных для каждого значения остаются неутверждённым открытым продуктовым решением**; SHORT явно не равен scalping (FR-027 остаётся отдельным режимом); недостаточность данных для выбранного горизонта обязана честно снижать уверенность, а не маскироваться;
+- **PO-4** — заметки (Notes) утверждены как editable/deletable, с опциональной ссылкой на тикер/инсайт «только для проверки существования» (не чтение/подписка на содержимое) — FR-032, UJ-019, `MODULE_BOUNDARIES.md` §14 (зависимость `notes → insights` добавлена по аналогии с уже существующей `journal → insights`);
+- **PO-5** — согласовано направление на более богатую структуру инсайта (forward catalysts, invalidation conditions, разделение факт/интерпретация и т. д.) — **FR-018/схема/prompt/evaluation dataset намеренно не тронуты в этой задаче**, требуется сначала определить входные данные;
+- **PO-6** — согласован концептуальный конвейер интеллектуального контекста (источники → нормализация → качество/свежесть → дедупликация/релевантность → контекст → provenance → AI-синтез → сохранённый инсайт → результат/оценка) — зафиксирован новым документом `docs/architecture/TARGET_INTELLIGENCE_CONTEXT.md` с явной классификацией 15 категорий контекста (CURRENT / MVP FOUNDATION / MVP REQUIRED / Post-MVP / Future / UNRESOLVED-REQUIRES-PO-DECISION) — **это классификация, не разрешение реализовать каждую категорию**; AI явно задокументирован как один компонент конвейера, не весь продукт.
+
+Учебное направление (Learning/Calibration) подтверждено как поэтапное: feedback storage → outcome dataset → analytics/calibration → retrieval → human-governed adaptation → (отдельно утверждаемое в будущем) model-training evaluation; ни один документ не описывает текущую систему как «обучающуюся» только на основании того, что feedback сохраняется.
+
+Изменённые/созданные документы этой задачи: `docs/architecture/INFORMATION_ARCHITECTURE.md` (новый, На ревью), `docs/architecture/TARGET_INTELLIGENCE_CONTEXT.md` (новый, На ревью), `docs/product/FUNCTIONAL_REQUIREMENTS.md` (FR-006, FR-032, FR-017 — точечные правки), `docs/product/USER_JOURNEYS.md` (UJ-005, UJ-019), `docs/architecture/MODULE_BOUNDARIES.md` (§12, §14, DAG-матрица), `docs/architecture/DATA_FLOWS.md` (DF-001, DF-011), `docs/architecture/TECHNOLOGY_EVALUATION.md` (новый раздел 14 «Многорыночные данные», дорожная карта ADR расширена до 11 позиций), `docs/product/PRODUCT_SCOPE.md` (раздел 30, точечная правка), `docs/decisions/ADR-0011-multi-market-data-provider-strategy.md` (новый, Черновик), `docs/DOCUMENT_REGISTER.md`, настоящий файл.
+
+Не входило в задачу и не выполнялось: изменение производственного кода, Phase 1 UI, реализация провайдеров, изменение AI prompt/schema/evaluation кода, создание миграций (явный запрет Product Owner).
+
+Отдельная задача ревью/финализации (после первичного создания документов Phase 0) выполнила сверку каждого изменённого/нового документа против `PROJECT_CHARTER.md`, `DOCUMENTATION_STANDARD.md`, `ADR_PROCESS.md` и связанных продуктовых/архитектурных документов; нашла и исправила 4 точечных документационных дефекта (опечатка, устаревшая формулировка ссылки на `ADR-0011`, неполный список связанных документов в `INFORMATION_ARCHITECTURE.md`, недостаточно однозначная формулировка раздела 9 настоящего файла); не нашла ни одного противоречия, требующего нового решения Product Owner. Изменения объединены в один коммит согласно `GIT_WORKFLOW.md` — push и merge не выполнялись (требуют отдельного разрешения).
+
+## 4a. Предыдущая ревью-задача (теперь завершена)
+
+Short/Full Insight Mode Vertical Slice (ветка `feat/insight-short-full-mode`, PR #45, смёржен в `main`) — FR-021 (краткий инсайт), FR-022 (полный инсайт). **Только frontend** — ни один backend-файл не менялся, ни новой AI-генерации, ни нового endpoint'а.
 
 - **Product Owner decisions (через AskUserQuestion, не решено самостоятельно)**: состав краткого режима — **сбалансированный, 5 из 10 разделов FR-018** (Краткий вывод, Ключевые факты, Уровень уверенности, Что можно рассмотреть, Основные риски); default-режим — **«Кратко»**;
 - Presentation-only toggle поверх уже полученного structured результата — **0 HTTP-запросов** при переключении (проверено вживую через network log: 5 переключений подряд → 0 запросов), не вызывает xAI/backend/market/news повторно, не создаёт новый инсайт, не трогает evaluation/outcome;
@@ -64,7 +85,7 @@ Short/Full Insight Mode Vertical Slice (ветка `feat/insight-short-full-mode
 
 Реально проверено: `npm run type-check` → чисто; `npm run build` → чисто, маршруты не изменились; backend не менялся (`git diff --name-only -- backend/` пусто) — полный `pytest` не требовался; полная real-browser верификация (генерация → default «Кратко», 5 разделов → переключение «Подробно», все 9 заголовков (10 секций, confidence — один блок с двумя абзацами) → 5 переключений туда-обратно → 0 сетевых запросов → сохранение инсайта → открытие истории → default «Кратко» и там же → переключение «Подробно» → снова 0 запросов → disclaimer виден в обоих режимах → оценка/результат/ссылка «Добавить в дневник» продолжают работать → F5 → режим корректно сбрасывается к default → chart/news/watchlist не сломаны); тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**`/весь `backend/**` не изменены.
 
-## 4a. Предыдущая ревью-задача (теперь завершена)
+## 4b. Предыдущая ревью-задача (теперь завершена)
 
 Trade Journal Vertical Slice (ветка `feat/trade-journal`) — FR-030 (базовый дневник сделок), UJ-017 (создание записи, опционально со ссылкой на ранее сформированный инсайт).
 
@@ -78,7 +99,7 @@ Trade Journal Vertical Slice (ветка `feat/trade-journal`) — FR-030 (ба�
 
 Реально проверено: `pytest -v` → 391 passed, 31 skipped (без регрессий, было 344/23); `mypy src tests` → чисто (92 файла); `alembic current` → `0005_journal_entries (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл + FK-constraint подтверждены; AI-файлы не менялись — offline/live evaluation не запускались повторно (не требовалось, обосновано); полная real-browser верификация (Дневник-ссылка на главной → генерация+сохранение инсайта → «Добавить в дневник» → форма предзаполнена ticker+insight_id → создание записи → F5 → запись сохранилась → вторая независимая запись → редактирование → F5 → правка сохранилась, «(изменено)» показано → нет кнопки/эндпоинта удаления → watchlist/chart/news/AI/история инсайтов продолжают работать); тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4b. Ревью-задача до предыдущей (тоже завершена)
+## 4c. Ревью-задача до предыдущей (тоже завершена)
 
 Insight Evaluation & Outcome Tracking Vertical Slice (ветка `feat/insight-evaluation`) — закрывает последний шаг канонического MVP-сценария (`PRODUCT_SCOPE.md` §21: «...сформировать инсайт → увидеть источники → сохранить → **оценить**»): FR-035 (пользовательская оценка сохранённого инсайта), FR-036/FR-038 (ручная фиксация результата, неразрывно связанная с исходным инсайтом).
 
@@ -94,7 +115,7 @@ Insight Evaluation & Outcome Tracking Vertical Slice (ветка `feat/insight-e
 
 Реально проверено: `pytest -v` → 344 passed, 23 skipped (без регрессий, было 309/18); `mypy src tests` → чисто (85 файлов); `alembic current` → `0004_insight_evaluations (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл + FK-constraint подтверждены; AI-файлы не менялись — offline/live evaluation не запускались повторно (не требовалось, обосновано); полная real-browser верификация (generate → save → history → evaluate → F5 → оценка сохранилась → outcome → F5 → результат сохранился → provenance/содержимое исходного инсайта не изменились → вторая независимая запись без унаследованной оценки/результата → watchlist/chart/news/search продолжают работать), включая honest recovery от двух реальных Twelve Data rate-limit окон; тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4c. Более ранняя ревью-задача (тоже завершена)
+## 4d. Более ранняя ревью-задача (тоже завершена)
 
 Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insight-persistence`) — доводит существующий Instrument AI Analysis до обязательных MVP-требований: FR-018 (10 обязательных секций insight), FR-019 (явный категориальный confidence), FR-034 (persistence + история инсайтов), FR-011 (минимальный source attribution ключевых фактов), ADR-0004/ADR-0007 provenance requirements.
 
@@ -110,7 +131,7 @@ Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insi
 
 Реально проверено: `pytest -v` → 309 passed, 18 skipped (без регрессий); `mypy src tests` → чисто (72 файла); `alembic current` → `0003_insights (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл подтверждён, `watchlist_items` не тронута; offline evaluation → 12/12, 0 violations; live evaluation (opt-in) → 3/3, 0 violations; полная real-browser верификация (generate → структура/confidence → save → F5 → история сохраняется → detail с provenance → вторая генерация/сохранение → newest-first → chart/news/search/watchlist продолжают работать), тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4d. Ещё более ранняя ревью-задача (тоже завершена)
+## 4e. Ещё более ранняя ревью-задача (тоже завершена)
 
 AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) — первый, намеренно небольшой, воспроизводимый evaluation harness для уже существующего `GenerateInstrumentAnalysis` (ADR-0007 §52 явно требует evaluation dataset до дальнейшего расширения production-использования модели). **Не пользовательская фича** — frontend не менялся вообще, ничего не выполняется в браузере, ничего не вызывает market/news provider:
 
@@ -193,15 +214,17 @@ AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) �
 
 ## 7. Последняя завершённая задача
 
-Trade Journal Vertical Slice — завершён.
+Short/Full Insight Mode Vertical Slice (PR #45) — завершён и смёржен в `main`. После этого проведён отдельный, не связанный с кодом Product/Architecture Checkpoint (аналитическая задача), по итогам которого Product Owner ратифицировал PO-1–PO-6 (раздел 4).
 
 ## 8. Текущая задача
 
-Short/Full Insight Mode Vertical Slice — на ревью.
+Phase 0 — Documentation & Architecture Decisions (ветка `docs/phase0-architecture-decisions`) — на ревью (раздел 4). Реализация Phase 1 явно не начата по прямому указанию Product Owner.
 
 ## 9. Следующий планируемый блок
 
-Следующий продуктовый vertical slice определяется по roadmap/FUNCTIONAL_REQUIREMENTS.md после ревью Short/Full Insight Mode Vertical Slice — вероятные кандидаты (не предрешено этой записью): Personal Notes (FR-032), базовая навигация по рыночным разделам (FR-003/004). MVP в целом не считается завершённым.
+**Не определён.** Phase 1 implementation package — предмет отдельного, ещё не принятого решения Product Owner после ревью Phase 0 (раздел 4). Настоящий документ не называет и не подразумевает ни один конкретный следующий пакет как одобренный или приоритетный.
+
+Справочно, без ранжирования и без статуса решения: FR-032 (Notes), FR-003/FR-004 (навигация Markets/Overview) и IA §2.4 (Insights/History) — MVP-требования, помеченные `INFORMATION_ARCHITECTURE.md` как «недостающее», к реализации ни одного из них разрешение не выдано. Реальное исследование провайдеров для `ADR-0011` также не запланировано этой записью как часть Phase 1 — отдельное решение Product Owner о привлечении Solution Architect. MVP в целом не считается завершённым.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 
@@ -221,7 +244,10 @@ Short/Full Insight Mode Vertical Slice — на ревью.
 ## 12. Известные проблемы
 
 - стратегия векторного поиска и остальной технологический стек не утверждены;
-- конкретные источники данных, лицензии и стоимость доступа не утверждены;
+- конкретные источники данных, лицензии и стоимость доступа не утверждены; для Forex/Crypto/Commodities рамка оценки зафиксирована (`TECHNOLOGY_EVALUATION.md`, раздел 14), но реальное исследование провайдеров не проводилось — `ADR-0011` остаётся Черновиком (раздел 4);
+- точные временные диапазоны горизонта анализа SHORT/MEDIUM/LONG и минимальное окно данных для каждого — не утверждены (FR-006, `TARGET_INTELLIGENCE_CONTEXT.md`, §2.3);
+- более богатая структура инсайта (forward catalysts, invalidation conditions и т. д., PO-5) согласована по направлению, но FR-018/схема/prompt/evaluation dataset намеренно не изменены — требуется отдельная задача по определению входных данных;
+- learning/calibration roadmap — поэтапный и явно гейтированный (раздел 4); текущее состояние — только хранение feedback, не calibration/retrieval/adaptation;
 - количественные NFR требуют измерений;
 - CI отсутствует.
 
