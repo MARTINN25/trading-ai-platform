@@ -191,6 +191,112 @@ class InstrumentAnalysis:
     schema_version: str
 
 
+class NewsRelevance(str, Enum):
+    """Categorical only — same reasoning as `ConfidenceLevel` (task
+    scope §5: "не изобретать numeric relevance score"). No document
+    fixes this vocabulary, so HIGH/MEDIUM/LOW is an implementation
+    decision, deliberately mirroring the already-established
+    `ConfidenceLevel` pattern rather than inventing a new shape."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class NewsRelationship(str, Enum):
+    """How a news item relates to the instrument it was fetched for
+    (task scope §6). `NOISE` is excluded from the curated feed by
+    `news_intelligence.use_cases`; the other five are retained and
+    ranked, never treated as a claim of causality — this is a
+    relevance/relationship label, not a `FORECAST_CONTRACT.md` §6
+    cross-market causal-claim type (that taxonomy is for *forecast*
+    statements; this one is for classifying a *news item*, a narrower
+    and separate concern)."""
+
+    COMPANY = "company"
+    SECTOR = "sector"
+    MARKET = "market"
+    MACRO = "macro"
+    INDIRECT = "indirect"
+    NOISE = "noise"
+
+
+# Bumped whenever the *shape* the model must fill for news enrichment
+# changes — independent of `INSIGHT_SCHEMA_VERSION` (a different output
+# contract entirely) and of `NEWS_PROMPT_VERSION` (`ai/news_prompts.py`),
+# same deliberate three-axis separation as the instrument-analysis
+# contract (see this module's other schema_version comment).
+NEWS_SCHEMA_VERSION = "news-intelligence-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class NewsCandidateFact:
+    """One already-deduplicated raw news item, ready to be handed to
+    the LLM gateway as DATA (untrusted external content, never
+    instructions — same rule as `NewsHeadlineFact`).
+
+    `id` is the provider's own news id (`InstrumentNewsItem.id`) — kept
+    here (unlike `NewsHeadlineFact`, which has no `id`) so the gateway's
+    batch response can be joined back to the exact input item the model
+    was grading, without depending on the model preserving order or
+    count (task scope §11: per-item degrade, not whole-batch)."""
+
+    id: str
+    headline: str
+    summary: str | None
+    source: str
+    published_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class NewsEnrichmentResult:
+    """One model-produced enrichment, already locally validated and
+    joined back to its `NewsCandidateFact.id`.
+
+    `impact_hypothesis` is always presented to the user as an explicit
+    hypothesis, never a fact (task scope §7, `FORECAST_CONTRACT.md` §4
+    fact/interpretation/hypothesis/uncertainty separation) — enforced by
+    prompt wording (`ai/news_prompts.py`) plus the frontend's fixed
+    "Возможное влияние (гипотеза)" label, not by a field-level type
+    distinction here."""
+
+    id: str
+    relevance: NewsRelevance
+    relationship: NewsRelationship
+    summary_ru: str
+    why_it_matters: str
+    impact_hypothesis: str
+
+
+class AINewsEnrichmentError(Exception):
+    """Base class for news-enrichment gateway errors — a sibling of
+    `AIAnalysisError`, not a subclass: news enrichment is a distinct
+    LLM call with its own failure handling (whole-batch failure must
+    degrade the news feed to unenriched items, never fail the page —
+    task scope §16), so callers are expected to catch this narrowly
+    rather than reuse `AIAnalysisError`'s instrument-analysis-oriented
+    handling."""
+
+
+class AINewsTimeoutError(AINewsEnrichmentError):
+    """The bounded provider request timeout was exceeded."""
+
+
+class AINewsRateLimitedError(AINewsEnrichmentError):
+    """Provider signaled rate limiting (e.g. HTTP 429)."""
+
+
+class AINewsProviderUnavailableError(AINewsEnrichmentError):
+    """Provider unreachable, rejected the request (auth/permission), or returned a server error."""
+
+
+class AINewsInvalidOutputError(AINewsEnrichmentError):
+    """Provider responded, but the content wasn't valid JSON or failed
+    local schema validation for the *entire* batch (a single item
+    failing validation is handled inside the gateway by dropping just
+    that item, not by raising this)."""
+
+
 class AIAnalysisError(Exception):
     """Base class for AI-analysis gateway errors.
 

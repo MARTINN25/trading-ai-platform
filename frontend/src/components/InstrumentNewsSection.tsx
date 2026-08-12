@@ -5,6 +5,8 @@ import {
   getInstrumentNews,
   InstrumentApiError,
   type InstrumentNewsItem,
+  type NewsRelationship,
+  type NewsRelevance,
 } from "@/lib/instrument-api";
 
 type NewsState =
@@ -41,6 +43,89 @@ function isSafeArticleUrl(url: string): boolean {
   }
 }
 
+const RELEVANCE_LABELS: Record<NewsRelevance, string> = {
+  high: "Высокая релевантность",
+  medium: "Средняя релевантность",
+  low: "Низкая релевантность",
+};
+
+const RELEVANCE_BADGE_CLASS: Record<NewsRelevance, string> = {
+  high: "instrument-news-badge instrument-news-badge--relevance-high",
+  medium: "instrument-news-badge instrument-news-badge--relevance-medium",
+  low: "instrument-news-badge instrument-news-badge--relevance-low",
+};
+
+const RELATIONSHIP_LABELS: Record<NewsRelationship, string> = {
+  company: "Компания",
+  sector: "Сектор",
+  market: "Рынок",
+  macro: "Макро",
+  indirect: "Косвенно",
+  noise: "Шум",
+};
+
+function NewsCard({ item }: { item: InstrumentNewsItem }) {
+  return (
+    <li className="instrument-news-card">
+      <div className="instrument-news-badges">
+        {item.enriched ? (
+          <>
+            {item.relevance ? (
+              <span className={RELEVANCE_BADGE_CLASS[item.relevance]}>
+                {RELEVANCE_LABELS[item.relevance]}
+              </span>
+            ) : null}
+            {item.relationship ? (
+              <span className="instrument-news-badge instrument-news-badge--relationship">
+                {RELATIONSHIP_LABELS[item.relationship]}
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <span className="instrument-news-badge instrument-news-badge--unenriched">
+            Без AI-анализа
+          </span>
+        )}
+      </div>
+
+      {item.enriched && item.summary_ru ? (
+        <>
+          <p className="instrument-news-summary-ru">{item.summary_ru}</p>
+          {item.why_it_matters ? (
+            <p className="instrument-news-field">
+              <span className="instrument-news-field-label">Почему важно: </span>
+              {item.why_it_matters}
+            </p>
+          ) : null}
+          {item.impact_hypothesis ? (
+            <p className="instrument-news-field">
+              <span className="instrument-news-field-label">Возможное влияние (гипотеза): </span>
+              {item.impact_hypothesis}
+            </p>
+          ) : null}
+          <div className="instrument-news-original">
+            <p className="instrument-news-original-label">Оригинал</p>
+            <h3 className="instrument-news-headline">{item.headline}</h3>
+          </div>
+        </>
+      ) : (
+        <h3 className="instrument-news-headline">{item.headline}</h3>
+      )}
+
+      {!item.enriched && item.summary ? (
+        <p className="instrument-news-summary">{item.summary}</p>
+      ) : null}
+
+      <p className="instrument-news-meta">
+        {item.source} · {formatPublishedAt(item.published_at)}
+      </p>
+      <a href={item.url} target="_blank" rel="noopener noreferrer" className="instrument-news-link">
+        Открыть источник →
+      </a>
+    </li>
+  );
+}
+
 export default function InstrumentNewsSection({ ticker }: { ticker: string }) {
   const [state, setState] = useState<NewsState>({ status: "loading" });
 
@@ -62,6 +147,8 @@ export default function InstrumentNewsSection({ ticker }: { ticker: string }) {
   }, [load]);
 
   const safeItems = state.status === "loaded" ? state.items.filter((item) => isSafeArticleUrl(item.url)) : [];
+  const anyEnriched = safeItems.some((item) => item.enriched);
+  const allDegraded = safeItems.length > 0 && !anyEnriched;
 
   return (
     <section className="instrument-news-section" aria-labelledby="instrument-news-heading">
@@ -80,27 +167,19 @@ export default function InstrumentNewsSection({ ticker }: { ticker: string }) {
         )}
 
         {state.status === "loaded" && safeItems.length === 0 && (
-          <p className="instrument-news-empty">Свежих новостей по инструменту нет.</p>
+          <p className="instrument-news-empty">Нет достаточно релевантных новостей.</p>
+        )}
+
+        {state.status === "loaded" && allDegraded && (
+          <p className="instrument-news-degraded-notice">
+            AI-объяснение сейчас недоступно — показаны исходные новости без анализа.
+          </p>
         )}
 
         {state.status === "loaded" && safeItems.length > 0 && (
           <ul className="instrument-news-list">
             {safeItems.map((item) => (
-              <li key={item.id} className="instrument-news-card">
-                <h3 className="instrument-news-headline">{item.headline}</h3>
-                {item.summary ? <p className="instrument-news-summary">{item.summary}</p> : null}
-                <p className="instrument-news-meta">
-                  {item.source} · {formatPublishedAt(item.published_at)}
-                </p>
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="instrument-news-link"
-                >
-                  Открыть источник →
-                </a>
-              </li>
+              <NewsCard key={item.id} item={item} />
             ))}
           </ul>
         )}

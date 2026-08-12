@@ -54,20 +54,55 @@ export interface InstrumentPriceHistory {
   points: InstrumentHistoryPoint[];
 }
 
+/** FR-064 — a categorical relevance level, never a fabricated numeric score. */
+export type NewsRelevance = "high" | "medium" | "low";
+
+/**
+ * FR-064 — how a news item relates to the instrument it was fetched
+ * for. `noise` items are already excluded server-side (`GetNewsIntelligence`)
+ * — this client should never need to filter them out again, but the
+ * type exists because a raw/unenriched item's `relationship` is `null`,
+ * not because `noise` is expected to appear here.
+ */
+export type NewsRelationship = "company" | "sector" | "market" | "macro" | "indirect" | "noise";
+
 export interface InstrumentNewsItem {
   id: string;
   headline: string;
   source: string;
   published_at: string;
   url: string;
-  /** `null`, never an invented placeholder, when the provider didn't return one. */
+  /** The provider's own, untranslated summary — `null`, never an
+   * invented placeholder, when the provider didn't return one. */
   summary: string | null;
+  /**
+   * Phase 2A (FR-064): `false` means the AI enrichment fields below are
+   * all `null` — either the LLM gateway isn't configured, the batch
+   * enrichment call failed, or this specific item wasn't returned by
+   * the model. Never a fabricated placeholder in place of a missing
+   * enrichment — the UI must show a plainer card, not invent content.
+   */
+  enriched: boolean;
+  /** Concise Russian summary — materially shorter than `summary`/`headline`. */
+  summary_ru: string | null;
+  why_it_matters: string | null;
+  relevance: NewsRelevance | null;
+  relationship: NewsRelationship | null;
+  /** Always an explicit hypothesis, never a prediction — the UI must
+   * label it as such, the string itself is not guaranteed to contain
+   * hedging language verbatim. */
+  impact_hypothesis: string | null;
 }
 
 export interface InstrumentNewsResponse {
   ticker: string;
   source: string;
-  /** Always newest-first, always capped at a fixed size — never provider-controlled pagination. */
+  /**
+   * Phase 2A: a *curated* set — NOISE items excluded, direct relevance
+   * preferred, bounded independently of how many raw items the
+   * provider returned. An empty list means "no sufficiently relevant
+   * news," a valid, non-error state (task scope §15).
+   */
   items: InstrumentNewsItem[];
 }
 
@@ -433,6 +468,29 @@ export async function getInstrumentPriceHistory(
   return data;
 }
 
+function isNewsRelevance(value: unknown): value is NewsRelevance {
+  return value === "high" || value === "medium" || value === "low";
+}
+
+function isNullableNewsRelevance(value: unknown): value is NewsRelevance | null {
+  return value === null || isNewsRelevance(value);
+}
+
+function isNewsRelationship(value: unknown): value is NewsRelationship {
+  return (
+    value === "company" ||
+    value === "sector" ||
+    value === "market" ||
+    value === "macro" ||
+    value === "indirect" ||
+    value === "noise"
+  );
+}
+
+function isNullableNewsRelationship(value: unknown): value is NewsRelationship | null {
+  return value === null || isNewsRelationship(value);
+}
+
 function isInstrumentNewsItem(value: unknown): value is InstrumentNewsItem {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -444,7 +502,13 @@ function isInstrumentNewsItem(value: unknown): value is InstrumentNewsItem {
     typeof candidate.source === "string" &&
     typeof candidate.published_at === "string" &&
     typeof candidate.url === "string" &&
-    isNullableString(candidate.summary)
+    isNullableString(candidate.summary) &&
+    typeof candidate.enriched === "boolean" &&
+    isNullableString(candidate.summary_ru) &&
+    isNullableString(candidate.why_it_matters) &&
+    isNullableNewsRelevance(candidate.relevance) &&
+    isNullableNewsRelationship(candidate.relationship) &&
+    isNullableString(candidate.impact_hypothesis)
   );
 }
 

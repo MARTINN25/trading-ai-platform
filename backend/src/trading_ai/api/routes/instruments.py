@@ -59,6 +59,9 @@ from trading_ai.market_data.use_cases import (
     GetInstrumentPriceHistory,
     SearchInstruments,
 )
+from trading_ai.news_intelligence.domain import CuratedNews, CuratedNewsItem
+from trading_ai.news_intelligence.repository import NewsIntelligenceRepository
+from trading_ai.news_intelligence.use_cases import GetNewsIntelligence
 
 router = APIRouter()
 
@@ -129,8 +132,17 @@ class InstrumentHistoryResponse(BaseModel):
 
 
 class InstrumentNewsItemResponse(BaseModel):
-    """`summary` is `None`, not an invented placeholder, whenever the
-    provider didn't return one — never substituted with empty text."""
+    """Phase 2A (FR-064): additive extension over the original raw-news
+    shape — `id`/`headline`/`source`/`published_at`/`url`/`summary`
+    (the provider's own, untranslated summary) are unchanged from
+    before this task; every field below is new and optional, so an
+    older client reading only the original fields keeps working.
+
+    `enriched=False` means the AI enrichment fields are all `None` —
+    either the LLM gateway isn't configured, the batch call failed, or
+    this specific item wasn't returned/validated by the model (task
+    scope §16: graceful per-item/whole-response degradation, never a
+    fabricated placeholder in place of a missing enrichment)."""
 
     id: str
     headline: str
@@ -138,17 +150,41 @@ class InstrumentNewsItemResponse(BaseModel):
     published_at: datetime
     url: str
     summary: str | None = None
+    enriched: bool = False
+    summary_ru: str | None = None
+    why_it_matters: str | None = None
+    relevance: str | None = None
+    relationship: str | None = None
+    impact_hypothesis: str | None = None
 
 
 class InstrumentNewsResponse(BaseModel):
-    """`items` is always newest-first and capped at a fixed size (see
-    `news_gateway.FinnhubNewsGateway`) — never provider-controlled
-    pagination. An empty `items` list is a valid, non-error response,
-    same as an empty `points` list for history."""
+    """`items` is now a *curated* set (Phase 2A, task scope §15): NOISE
+    items are excluded, direct relevance is preferred, and the count is
+    bounded independently of how many raw items the provider returned —
+    an empty `items` list is a valid, non-error response meaning "no
+    sufficiently relevant news," same as before this task."""
 
     ticker: str
     source: str
     items: list[InstrumentNewsItemResponse]
+
+
+def _to_news_item_response(item: CuratedNewsItem) -> InstrumentNewsItemResponse:
+    return InstrumentNewsItemResponse(
+        id=item.id,
+        headline=item.headline,
+        source=item.source,
+        published_at=item.published_at,
+        url=item.url,
+        summary=item.summary,
+        enriched=item.enriched,
+        summary_ru=item.summary_ru,
+        why_it_matters=item.why_it_matters,
+        relevance=item.relevance.value if item.relevance is not None else None,
+        relationship=item.relationship.value if item.relationship is not None else None,
+        impact_hypothesis=item.impact_hypothesis,
+    )
 
 
 class KeyFactResponse(BaseModel):
@@ -371,6 +407,19 @@ def get_ai_gateway(request: Request) -> XAIGateway:
     return gateway  # type: ignore[no-any-return]
 
 
+def get_optional_ai_gateway(request: Request) -> XAIGateway | None:
+    """Unlike `get_ai_gateway`, never raises.
+
+    News enrichment degrades gracefully when the LLM gateway isn't
+    configured at all (Phase 2A, task scope §16) — the raw, curated
+    (deterministic-only) news feed remains usable; only the AI
+    enrichment fields are absent. Same optional pattern as
+    `get_optional_news_gateway` above.
+    """
+    gateway = getattr(request.app.state, "ai_gateway", None)
+    return gateway
+
+
 def get_generate_instrument_analysis_use_case(
     ai_gateway: Annotated[XAIGateway, Depends(get_ai_gateway)],
     market_gateway: Annotated[TwelveDataGateway, Depends(get_market_data_gateway)],
@@ -432,6 +481,33 @@ def get_insight_repository(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> InsightRepository:
     return InsightRepository(session)
+
+
+def get_news_intelligence_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> NewsIntelligenceRepository:
+    """Phase 2A: unlike the raw-news lookup before this task, the
+    curated/enriched news endpoint now requires a database connection
+    (same hard-dependency pattern as `insights`/`journal`/`evaluations`)
+    — it is the persisted reuse cache (task scope §10), not optional
+    decoration. `GET /instruments/{ticker}/news` reports 503 when the
+    database isn't configured, a real, documented behavior change from
+    before this task (see the Phase 2A final report)."""
+    return NewsIntelligenceRepository(session)
+
+
+def get_news_intelligence_use_case(
+    news_use_case: Annotated[GetInstrumentNews, Depends(get_instrument_news_use_case)],
+    repository: Annotated[NewsIntelligenceRepository, Depends(get_news_intelligence_repository)],
+    optional_ai_gateway: Annotated[XAIGateway | None, Depends(get_optional_ai_gateway)],
+    search_use_case: Annotated[SearchInstruments, Depends(get_search_instruments_use_case)],
+) -> GetNewsIntelligence:
+    return GetNewsIntelligence(
+        news_use_case=news_use_case,
+        repository=repository,
+        ai_gateway=optional_ai_gateway,
+        search_use_case=search_use_case,
+    )
 
 
 def get_save_insight_use_case(
@@ -529,23 +605,21 @@ async def get_instrument_price_history(
 @router.get("/instruments/{ticker}/news", response_model=InstrumentNewsResponse)
 async def get_instrument_news(
     ticker: str,
-    use_case: Annotated[GetInstrumentNews, Depends(get_instrument_news_use_case)],
+    use_case: Annotated[GetNewsIntelligence, Depends(get_news_intelligence_use_case)],
 ) -> InstrumentNewsResponse:
-    news = await use_case.execute(ticker)
+    """Phase 2A (FR-064, UJ-034): returns a curated, classified,
+    Russian-summarized news feed instead of a raw pass-through of the
+    provider's items — see `GetNewsIntelligence` for the full pipeline
+    (dedup, cache reuse, LLM enrichment, curation). Still degrades to a
+    deterministic-only curated list (all `enriched=False`) when the LLM
+    gateway is unavailable, and still reports the provider's own
+    404/503/504 errors unchanged when Finnhub itself fails — only the
+    *content* of a successful response has changed (task scope §13)."""
+    news: CuratedNews = await use_case.execute(ticker)
     return InstrumentNewsResponse(
         ticker=news.ticker,
         source=news.source,
-        items=[
-            InstrumentNewsItemResponse(
-                id=item.id,
-                headline=item.headline,
-                source=item.source,
-                published_at=item.published_at,
-                url=item.url,
-                summary=item.summary,
-            )
-            for item in news.items
-        ],
+        items=[_to_news_item_response(item) for item in news.items],
     )
 
 
