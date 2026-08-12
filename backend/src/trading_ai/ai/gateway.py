@@ -31,12 +31,18 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from trading_ai.ai.news_prompts import NEWS_SYSTEM_INSTRUCTIONS, build_news_user_content
 from trading_ai.ai.prompts import PROMPT_VERSION, SYSTEM_INSTRUCTIONS, build_user_content
 from trading_ai.ai.types import (
     DISCLAIMER_TEXT,
     INSIGHT_SCHEMA_VERSION,
     AIAnalysisError,
     AIInvalidOutputError,
+    AINewsEnrichmentError,
+    AINewsInvalidOutputError,
+    AINewsProviderUnavailableError,
+    AINewsRateLimitedError,
+    AINewsTimeoutError,
     AIProviderUnavailableError,
     AIRateLimitedError,
     AITimeoutError,
@@ -44,6 +50,10 @@ from trading_ai.ai.types import (
     InstrumentAnalysis,
     InstrumentAnalysisInput,
     KeyFact,
+    NewsCandidateFact,
+    NewsEnrichmentResult,
+    NewsRelationship,
+    NewsRelevance,
 )
 
 logger = logging.getLogger(__name__)
@@ -113,6 +123,56 @@ _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
     "strict": True,
 }
 
+# One batch call per ticker-news-fetch (task scope §5, §10: LLM only
+# for semantic ambiguity, called once per already-deduplicated batch,
+# never once per item) — bounded independently of whatever cap the
+# caller applies, as a defensive ceiling on prompt size.
+_MAX_NEWS_ITEMS_PER_BATCH = 10
+
+# Enrichment is lighter-weight than full instrument analysis, but still
+# bounded and single-attempt (same reasoning as
+# `_REQUEST_TIMEOUT_SECONDS` above — a "Повторить" user click is the
+# retry mechanism, not automatic retry here).
+_NEWS_REQUEST_TIMEOUT_SECONDS = 45.0
+
+_NEWS_RESULT_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "relationship": {
+            "type": "string",
+            "enum": ["company", "sector", "market", "macro", "indirect", "noise"],
+        },
+        "relevance": {"type": "string", "enum": ["high", "medium", "low"]},
+        "summary_ru": {"type": "string"},
+        "why_it_matters": {"type": "string"},
+        "impact_hypothesis": {"type": "string"},
+    },
+    "required": [
+        "id",
+        "relationship",
+        "relevance",
+        "summary_ru",
+        "why_it_matters",
+        "impact_hypothesis",
+    ],
+    "additionalProperties": False,
+}
+
+_NEWS_RESPONSE_JSON_SCHEMA: dict[str, Any] = {
+    "name": "news_intelligence",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "results": {"type": "array", "items": _NEWS_RESULT_ITEM_SCHEMA},
+        },
+        "required": ["results"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
 # Best-effort, defense-in-depth check on top of the prompt instructions
 # (task scope §4) — not a substitute for prompt design, just an honest
 # extra guard: a response containing these is never trusted as valid
@@ -180,6 +240,28 @@ class ModelOutputSchema(BaseModel):
     key_drivers: list[str] = Field(min_length=1, max_length=5)
 
 
+class NewsEnrichmentItemSchema(BaseModel):
+    """Local source of truth for one `results[]` entry (mirrors
+    `ModelOutputSchema`'s role for instrument analysis) — validated
+    independently of the provider's own "strict" structured-output
+    claim."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=100)
+    relationship: NewsRelationship
+    relevance: NewsRelevance
+    summary_ru: str = Field(min_length=1, max_length=600)
+    why_it_matters: str = Field(min_length=1, max_length=400)
+    impact_hypothesis: str = Field(min_length=1, max_length=400)
+
+
+class NewsEnrichmentBatchSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[NewsEnrichmentItemSchema] = Field(max_length=_MAX_NEWS_ITEMS_PER_BATCH)
+
+
 class XAIGateway:
     """Concrete gateway for xAI. One provider, one class — no generic framework."""
 
@@ -197,6 +279,13 @@ class XAIGateway:
         # Injectable only for tests (`httpx.MockTransport`) — `None`
         # means httpx's real network transport, unchanged in production.
         self._transport = transport
+
+    @property
+    def model(self) -> str:
+        """Public read accessor — `news_intelligence.use_cases` records
+        this in the persisted enrichment row's provenance fields
+        without needing its own copy of the configured model name."""
+        return self._model
 
     async def generate_instrument_analysis(
         self, analysis_input: InstrumentAnalysisInput
@@ -380,6 +469,177 @@ class XAIGateway:
                 status,
                 latency_ms,
             )
+
+
+    async def generate_news_intelligence(
+        self, ticker: str, candidates: tuple[NewsCandidateFact, ...]
+    ) -> list[NewsEnrichmentResult]:
+        """One batch call for up to `_MAX_NEWS_ITEMS_PER_BATCH` already-
+        deduplicated candidates. Never raises for a single bad item —
+        only for whole-call failures (network/timeout/rate-limit/
+        provider-down/malformed-response). A result missing from the
+        model's response, or one that fails local per-item validation,
+        is silently dropped from the returned list — the caller
+        (`news_intelligence.use_cases`) treats a missing id as "not
+        enriched" for that one item, never as a batch failure (task
+        scope §11, §16)."""
+        if not candidates:
+            return []
+        bounded = candidates[:_MAX_NEWS_ITEMS_PER_BATCH]
+
+        started = time.monotonic()
+        try:
+            response = await self._fetch_news_raw(ticker, bounded)
+            results, usage = self._parse_news_response(bounded, response)
+        except AINewsEnrichmentError as exc:
+            self._log_news(ticker, started, status=type(exc).__name__, items_count=len(bounded))
+            raise
+        self._log_news(
+            ticker,
+            started,
+            status="ok",
+            items_count=len(bounded),
+            enriched_count=len(results),
+            input_tokens=usage[0],
+            output_tokens=usage[1],
+        )
+        return results
+
+    async def _fetch_news_raw(
+        self, ticker: str, candidates: tuple[NewsCandidateFact, ...]
+    ) -> httpx.Response:
+        payload = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": NEWS_SYSTEM_INSTRUCTIONS},
+                {"role": "user", "content": build_news_user_content(ticker, candidates)},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": _NEWS_RESPONSE_JSON_SCHEMA,
+            },
+        }
+        try:
+            async with httpx.AsyncClient(
+                timeout=_NEWS_REQUEST_TIMEOUT_SECONDS, transport=self._transport
+            ) as client:
+                response = await client.post(
+                    f"{self._base_url}/chat/completions",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                )
+        except httpx.TimeoutException as exc:
+            raise AINewsTimeoutError("timeout generating news intelligence") from exc
+        except httpx.HTTPError as exc:
+            raise AINewsProviderUnavailableError(
+                "network error generating news intelligence"
+            ) from exc
+        return response
+
+    def _parse_news_response(
+        self, candidates: tuple[NewsCandidateFact, ...], response: httpx.Response
+    ) -> tuple[list[NewsEnrichmentResult], tuple[int | None, int | None]]:
+        if response.status_code == 429:
+            raise AINewsRateLimitedError("provider rate limit exceeded")
+        if response.status_code in (401, 403):
+            raise AINewsProviderUnavailableError("provider rejected the request")
+        if response.status_code >= 500:
+            raise AINewsProviderUnavailableError(f"provider returned {response.status_code}")
+        if not response.is_success:
+            raise AINewsProviderUnavailableError(f"provider returned {response.status_code}")
+
+        try:
+            payload: Any = response.json()
+        except ValueError as exc:
+            raise AINewsInvalidOutputError("provider response was not valid JSON") from exc
+
+        if not isinstance(payload, dict):
+            raise AINewsInvalidOutputError("provider response was not a JSON object")
+
+        try:
+            content = payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise AINewsInvalidOutputError("provider response missing expected content") from exc
+
+        if not isinstance(content, str):
+            raise AINewsInvalidOutputError("provider response content was not a string")
+
+        try:
+            structured = json.loads(content)
+        except ValueError as exc:
+            raise AINewsInvalidOutputError("model output was not valid JSON") from exc
+
+        try:
+            validated = NewsEnrichmentBatchSchema.model_validate(structured)
+        except ValidationError as exc:
+            raise AINewsInvalidOutputError("model output failed schema validation") from exc
+
+        known_ids = {candidate.id for candidate in candidates}
+        results: list[NewsEnrichmentResult] = []
+        seen_ids: set[str] = set()
+        for item in validated.results:
+            # Defensive per-item drop, not a whole-batch failure (task
+            # scope §11): an id the model invented, a duplicate id, or
+            # forbidden-recommendation language in one item's text must
+            # never take down the rest of an otherwise-good batch.
+            if item.id not in known_ids or item.id in seen_ids:
+                continue
+            combined_text = " ".join([item.summary_ru, item.why_it_matters, item.impact_hypothesis])
+            if contains_forbidden_language(combined_text):
+                continue
+            seen_ids.add(item.id)
+            results.append(
+                NewsEnrichmentResult(
+                    id=item.id,
+                    relevance=item.relevance,
+                    relationship=item.relationship,
+                    summary_ru=item.summary_ru,
+                    why_it_matters=item.why_it_matters,
+                    impact_hypothesis=item.impact_hypothesis,
+                )
+            )
+
+        usage_obj = payload.get("usage")
+        input_tokens = (
+            usage_obj.get("prompt_tokens")
+            if isinstance(usage_obj, dict) and isinstance(usage_obj.get("prompt_tokens"), int)
+            else None
+        )
+        output_tokens = (
+            usage_obj.get("completion_tokens")
+            if isinstance(usage_obj, dict) and isinstance(usage_obj.get("completion_tokens"), int)
+            else None
+        )
+        return results, (input_tokens, output_tokens)
+
+    def _log_news(
+        self,
+        ticker: str,
+        started: float,
+        *,
+        status: str,
+        items_count: int,
+        enriched_count: int | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+    ) -> None:
+        """Minimal observability per call (ADR-0009 §22, ADR-0007 §48) —
+        never the API key, prompt, model response, or article content."""
+        latency_ms = (time.monotonic() - started) * 1000
+        logger.info(
+            "news_intelligence operation=generate_news_intelligence ticker=%s provider=%s "
+            "model=%s status=%s latency_ms=%.1f items_count=%d enriched_count=%s "
+            "input_tokens=%s output_tokens=%s",
+            ticker,
+            SOURCE,
+            self._model,
+            status,
+            latency_ms,
+            items_count,
+            enriched_count if enriched_count is not None else "n/a",
+            input_tokens if input_tokens is not None else "n/a",
+            output_tokens if output_tokens is not None else "n/a",
+        )
 
 
 def compute_data_freshness(analysis_input: InstrumentAnalysisInput) -> tuple[str, datetime | None]:

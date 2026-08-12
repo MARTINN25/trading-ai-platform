@@ -2,7 +2,7 @@
 
 **Статус:** Утверждён
 **Владелец:** Product Owner
-**Дата последнего изменения:** 2026-08-12
+**Дата последнего изменения:** 2026-08-12 (Phase 2A)
 **Назначение:** предоставить AI-агентам краткий актуальный контекст перед началом задачи.
 
 Это оперативный, не архитектурный источник состояния (см. `docs/processes/DOCUMENTATION_STANDARD.md`, раздел 3). При расхождении с `PROJECT_CHARTER.md` или утверждёнными ADR приоритет имеют они.
@@ -53,9 +53,24 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 
 ## 4. Что находится на ревью в текущей задаче
 
-**Phase 2.0 — Global Intelligence & Forecast Contract Ratification** (ветка `docs/phase2-global-intelligence-forecast-contract`, создана от `main` после мерджа Phase 1 @ `e5cc0a3`). **Документационная задача — только `docs/` и `.ai-context/`; ни один файл `backend/`, `frontend/`, миграций, prompt/schema/evaluation-кода не изменён. Изменения реализованы, но намеренно НЕ закоммичены** — ожидает валидационного прохода и явного разрешения Product Owner на commit (`GIT_WORKFLOW.md`).
+**Phase 2A — News Intelligence** (ветка `feature/news-intelligence`, создана от `main` после мерджа Phase 2.0 @ `738398e`). **Реализация (backend + frontend), не только документация — ни один коммит не создан.** Изменения реализованы и полностью провалидированы (backend/frontend/real-browser/real-Postgres/real xAI live-вызовы), но намеренно НЕ закоммичены — ожидает ревью и явного разрешения Product Owner на commit (`GIT_WORKFLOW.md`).
 
-Задаче предшествовал отдельный, чат-only «Phase 2 Master Architecture — Global Realtime Market Intelligence & Forecasting» анализ (без изменений репозитория) — 27-раздельный разбор целевого направления платформы на глобальный рыночный интеллект. По его итогам Product Owner ратифицировал 13 решений (**PO-2.0-1 – PO-2.0-13**), которые и оформляет настоящая задача:
+Оформляет FR-064 (News Intelligence) и UJ-034 (потребление News Intelligence), ратифицированные Phase 2.0 (PO-2.0-13). Превращает сырую ленту новостей (`market_data.news_gateway`, Finnhub) в curated, классифицированную, переведённую на русский ленту:
+
+- **Новый backend-пакет `trading_ai/news_intelligence/`** (`domain.py`/`preprocessing.py`/`models.py`/`repository.py`/`use_cases.py`) — детерминированная нормализация заголовков и near-duplicate дедупликация (не только точный ID); use case `GetNewsIntelligence` координирует: dedup → проверка персистентного кэша обогащения → пакетный LLM-вызов только для ещё не обработанных элементов → curation (исключение `NOISE`, ранжирование `COMPANY > SECTOR > MACRO > MARKET > INDIRECT`, bounded cap 8) → честная деградация при недоступности LLM.
+- **Персистентный кэш = сама таблица** (`news_intelligence_items`, миграция `0006_news_intelligence_items`, append-only, `UNIQUE(ticker, news_provider, provider_news_id)`) — обработка происходит один раз на статью-для-тикера, затем переиспользуется на каждый последующий запрос/рестарт приложения, без Redis/новой БД (task scope §10). Только **успешно** обогащённые записи персистятся — сбой всей партии/отдельного элемента никогда не кэшируется как «обработано и провалено», чтобы будущий запрос мог повторить попытку.
+- **`ai/gateway.py`**: `XAIGateway.generate_news_intelligence` — новый публичный метод, тот же единственный LLM SDK-boundary (`ADR-0007`), пакетный вызов (до 10 новостей за один запрос), собственная Pydantic-схема, per-item деградация (пропущенный/невалидный элемент не проваливает всю партию). Новый промпт `ai/news_prompts.py` (`NEWS_PROMPT_VERSION = "news-intelligence-v1"`) с явной prompt-injection границей (заголовки/summary — untrusted DATA, никогда не инструкция).
+- **API**: `GET /instruments/{ticker}/news` расширен на месте (не новый endpoint) — ответ аддитивно расширен (`enriched`/`summary_ru`/`why_it_matters`/`relevance`/`relationship`/`impact_hypothesis`, все новые поля nullable). **Осознанное изменение поведения**: этот endpoint теперь требует БД (503 при неконфигурированной), как `/insights`/`/journal` — раньше был DB-free.
+- **Frontend**: `InstrumentNewsSection.tsx` полностью переработан — компактные карточки, бейджи релевантности/классификации, русское резюме, «Почему важно», явно помеченное «Возможное влияние (гипотеза)», оригинальный заголовок вторично, честная пустая («Нет достаточно релевантных новостей») и деградированная («Без AI-анализа» + предупреждение) состояния.
+- **AI evaluation**: параллельный небольшой harness (`ai/evaluation/news_dataset.py`/`news_evaluators.py`/`news_runner.py`) — 7 репрезентативных офлайн-кейсов (company/sector/macro/noise/prompt-injection/RU-перевод/hallucination-guard); не встроен в существующий CLI/`report.py` (структурно завязаны на `InstrumentAnalysis`) — осознанно отложено как последующий небольшой шаг.
+
+**Реально проверено:** backend `pytest -v` → 453 passed, 37 skipped (без регрессий); `mypy src tests` → чисто (107 файлов); alembic upgrade/downgrade/upgrade цикл против реальной Compose PostgreSQL подтверждён; frontend `npm run type-check`/`npm run build` → чисто. Полная real-browser верификация (реальные backend+frontend dev-серверы, реальная Compose PostgreSQL, реальные live-вызовы Finnhub и xAI): Flow A (AAPL, живое обогащение, 8 карточек, ранжирование company→sector→market→indirect, RU-резюме/почему-важно/гипотеза видны) — пройден; Flow B (SPRT, 0 сырых новостей от Finnhub → честное «Нет достаточно релевантных новостей») — пройден; Flow C (backend перезапущен без `TRADING_AI_LLM_API_KEY`, MSFT — 8 карточек «Без AI-анализа» + предупреждение, исходные данные не потеряны) — пройден; Flow D (повторный запрос AAPL — 0 новых вызовов LLM/поиска компании в логах, ответ ~30x быстрее, обогащённые данные пережили рестарт backend и отключение LLM-ключа) — пройден. Живой xAI-вызов подтверждён в логах (`operation=generate_news_intelligence ... enriched_count=10`).
+
+## 4a. Предыдущая ревью-задача (теперь завершена)
+
+Phase 2.0 — Global Intelligence & Forecast Contract Ratification (ветка `docs/phase2-global-intelligence-forecast-contract`) — **завершена и смёржена в `main` через PR #48** (коммит `6ca54e0`, merge-коммит `738398e`). Документационная задача — только `docs/` и `.ai-context/`; ни один файл `backend/`, `frontend/`, миграций, prompt/schema/evaluation-кода не был изменён этой задачей.
+
+Задаче предшествовал отдельный, чат-only «Phase 2 Master Architecture — Global Realtime Market Intelligence & Forecasting» анализ (без изменений репозитория) — 27-раздельный разбор целевого направления платформы на глобальный рыночный интеллект. По его итогам Product Owner ратифицировал 13 решений (**PO-2.0-1 – PO-2.0-13**), которые и оформила та задача:
 
 - **PO-2.0-1** — глобальные акции: США — **текущее** (полностью реализовано); Европа/Азия — **утверждённое направление расширения**, реализация не начата, требует провайдерского исследования, идентичности инструмента при кросс-листинге, нормализации валюты, календаря сессий.
 - **PO-2.0-2** — индексы, ставки/доходности, макро одобрены как категории **глобального рыночного контекста** — изначально контекст, не обязательно торгуемые «Рынки»; не исключает будущие производные (индексные фьючерсы/ETF).
@@ -69,13 +84,11 @@ DOC-0007 и DOC-0008 составляют единый блок управлен
 - **PO-2.0-10** — непрерывное рыночное наблюдение одобрено как целевое направление; первое производственное направление — polling-first фоновый сбор (не тик-уровень/миллисекунды) поверх уже утверждённого `ADR-0006`.
 - **PO-2.0-11** — одобрено создание DRAFT ADR (`ADR-0012`), рассматривающего отдельную логическую границу `monitoring` — **не равносильно принятию этой границы**; вопрос владения остаётся открытым (`MODULE_BOUNDARIES.md`).
 - **PO-2.0-12** — стадийная модель обучения/калибровки ратифицирована (Stage 0 хранение feedback → Stage 1 автоматическое измерение результата → Stage 2 сегментированная аналитика → Stage 3 калибровка → Stage 4 историческая выборка [заблокирована `ADR-0005`] → Stage 5 человеко-управляемая адаптация → Stage 6 обучение/дообучение модели, требует отдельного одобрения); хранение feedback само по себе не является «обучением».
-- **PO-2.0-13** — News Intelligence одобрена как высокоприоритетная возможность (резюме на русском, «почему важно», релевантность, provenance, гипотеза влияния) — реализация не начата.
+- **PO-2.0-13** — News Intelligence одобрена как высокоприоритетная возможность (резюме на русском, «почему важно», релевантность, provenance, гипотеза влияния) — реализация начата отдельной задачей Phase 2A (раздел 4 выше).
 
-**Изменённые/созданные документы этой задачи:** новый `docs/architecture/FORECAST_CONTRACT.md` (На ревью); `docs/architecture/TARGET_INTELLIGENCE_CONTEXT.md` (§2.1–§2.3/§2.6 обновлены, §2.16–§2.18 добавлены); `docs/product/PRODUCT_SCOPE.md` (§4/§9/§24/§30 дополнены, новый §31 «Долгосрочное продуктовое видение»); `docs/product/FUNCTIONAL_REQUIREMENTS.md` (FR-006 переформулирован, FR-061–FR-065 добавлены); `docs/product/USER_JOURNEYS.md` (UJ-005 уточнён, UJ-031–UJ-034 добавлены); `docs/architecture/INFORMATION_ARCHITECTURE.md` (§2.9–§2.12 — Forecast/Thesis, Monitor, Learning/Accuracy, Market Context, все Future/концептуальные); `docs/architecture/DATA_FLOWS.md` (DF-019–DF-023, все Future/концептуальные, расширяют уже существующие DF-007/DF-008, не дублируют их); `docs/architecture/MODULE_BOUNDARIES.md` (§12/§19 дополнены, новый раздел «Предложение (не принято): логическая граница monitoring»); новый `docs/decisions/ADR-0012-realtime-and-background-monitoring-runtime.md` (Черновик — строится поверх `ADR-0006`, не дублирует его; вопрос владения логикой мониторинга явно оставлен нерешённым, второй ADR не создан); `docs/architecture/TECHNOLOGY_EVALUATION.md` (новый §14.4 — вопросы исследования для глобальных акций/индексов/ставок/макро/календаря/фундаментальных данных/News, без выбора поставщиков; дорожная карта ADR расширена до 12); `docs/DOCUMENT_REGISTER.md`; настоящий файл.
+Изменённые/созданные документы: новый `docs/architecture/FORECAST_CONTRACT.md`; `docs/architecture/TARGET_INTELLIGENCE_CONTEXT.md` (§2.1–§2.3/§2.6 обновлены, §2.16–§2.18 добавлены); `docs/product/PRODUCT_SCOPE.md` (§4/§9/§24/§30 дополнены, новый §31); `docs/product/FUNCTIONAL_REQUIREMENTS.md` (FR-006 переформулирован, FR-061–FR-065 добавлены); `docs/product/USER_JOURNEYS.md` (UJ-005 уточнён, UJ-031–UJ-034 добавлены); `docs/architecture/INFORMATION_ARCHITECTURE.md` (§2.9–§2.12); `docs/architecture/DATA_FLOWS.md` (DF-019–DF-023); `docs/architecture/MODULE_BOUNDARIES.md` (§12/§19 дополнены, новый раздел «Предложение (не принято): логическая граница monitoring»); новый `docs/decisions/ADR-0012-realtime-and-background-monitoring-runtime.md` (Черновик); `docs/architecture/TECHNOLOGY_EVALUATION.md` (новый §14.4); `docs/DOCUMENT_REGISTER.md`; настоящий файл. Не входило в задачу: изменение производственного кода, тестов, миграций, интеграции провайдеров, AI prompt/schema, jobs/worker-реализации.
 
-**Не входило в задачу и не выполнялось:** изменение производственного кода (backend/frontend), тестов, миграций, интеграции провайдеров, AI prompt/schema, jobs/worker-реализации. Реальное провайдерское исследование для глобальных категорий не проводилось — намеренно, во избежание изобретённых фактов (аналогично `ADR-0011`, Phase 0).
-
-## 4a. Предыдущая ревью-задача (теперь завершена)
+## 4b. Более ранняя ревью-задача (теперь завершена)
 
 Phase 1 — Application Shell & Intelligence Workspace (ветка `feature/phase1-workspace-shell`) — **завершена и смёржена в `main` через PR #47** (коммит `8c69060`, merge-коммит `e5cc0a3`).
 
@@ -90,7 +103,7 @@ Product Owner утвердил конкретный объём пакета (н�
 
 Реально проверено: `pytest -v` → 401 passed, 32 skipped (было 391/31 — только новые тесты, без регрессий); `mypy src tests` → чисто (92 файла, без новых); `npm run type-check` → чисто; `npm run build` → чисто, все 6 маршрутов собраны (`/`, `/markets`, `/insights`, `/instruments/[ticker]`, `/journal`, `/_not-found`); `git diff --check` → чисто. Полная real-browser верификация через Playwright (реальные backend+frontend dev-серверы, реальная Compose PostgreSQL, реальный xAI live-вызов): Flow A (shell, активный пункт навигации, F5 на каждом маршруте) — пройден; Flow B (Markets: Акции работают, Forex/Crypto/Commodities честно заблокированы, 0 псевдо-форм) — пройден; Flow C (AAPL: котировка, график 1Д/5Д/1М, новости, AI-генерация вживую, краткий/полный режим, сохранение инсайта, история, 0 горизонтального overflow) — пройден; Flow D (кросс-тикерная История, newest-first, detail on demand, ссылка на инструмент) — пройден; Flow E (создание записи дневника, ссылка тикера, реципрокная ссылка Инсайт→Дневник→Инсайт через `?open=`, редактирование, отсутствие кнопки удаления) — пройден; Flow F (адаптивность 1440/820/390px, без overflow, nav остаётся видимой) — пройден; keyboard-focus (видимый `:focus-visible` outline, активный пункт nav не только цветом — жирный текст + underline) — пройден. Тестовые артефакты (2 инсайта AAPL, 2 записи дневника AAPL) остались в dev-базе — не могут быть удалены через приложение по дизайну (инсайты immutable, у дневника нет delete), тот же паттерн, что и в предыдущих задачах.
 
-## 4b. Более ранняя ревью-задача (теперь завершена)
+## 4c. Более ранняя ревью-задача (теперь завершена)
 
 Phase 0 — Documentation & Architecture Decisions (ветка `docs/phase0-architecture-decisions`) — **завершена и смёржена в `main` через PR #46** (коммит `a2966c3`, merge-коммит `88d1dfb`). Отдельная задача ревью/финализации (упомянутая ниже) нашла и исправила 4 точечных документационных дефекта, затем изменения были закоммичены и, после решения Product Owner, интегрированы в `main` через pull request (прямой push в `main` был отклонён правилами репозитория — интеграция выполнена через PR, не локальным merge). **Только документация** — ни один файл `backend/`, `frontend/`, миграций, prompt/schema/evaluation-кода не изменён.
 
@@ -111,7 +124,7 @@ Phase 0 — Documentation & Architecture Decisions (ветка `docs/phase0-arch
 
 Отдельная задача ревью/финализации (после первичного создания документов Phase 0) выполнила сверку каждого изменённого/нового документа против `PROJECT_CHARTER.md`, `DOCUMENTATION_STANDARD.md`, `ADR_PROCESS.md` и связанных продуктовых/архитектурных документов; нашла и исправила 4 точечных документационных дефекта (опечатка, устаревшая формулировка ссылки на `ADR-0011`, неполный список связанных документов в `INFORMATION_ARCHITECTURE.md`, недостаточно однозначная формулировка раздела 9 настоящего файла); не нашла ни одного противоречия, требующего нового решения Product Owner. Изменения объединены в один коммит согласно `GIT_WORKFLOW.md` — push и merge не выполнялись (требуют отдельного разрешения).
 
-## 4c. Предыдущая ревью-задача (теперь завершена)
+## 4d. Предыдущая ревью-задача (теперь завершена)
 
 Short/Full Insight Mode Vertical Slice (ветка `feat/insight-short-full-mode`, PR #45, смёржен в `main`) — FR-021 (краткий инсайт), FR-022 (полный инсайт). **Только frontend** — ни один backend-файл не менялся, ни новой AI-генерации, ни нового endpoint'а.
 
@@ -124,7 +137,7 @@ Short/Full Insight Mode Vertical Slice (ветка `feat/insight-short-full-mode
 
 Реально проверено: `npm run type-check` → чисто; `npm run build` → чисто, маршруты не изменились; backend не менялся (`git diff --name-only -- backend/` пусто) — полный `pytest` не требовался; полная real-browser верификация (генерация → default «Кратко», 5 разделов → переключение «Подробно», все 9 заголовков (10 секций, confidence — один блок с двумя абзацами) → 5 переключений туда-обратно → 0 сетевых запросов → сохранение инсайта → открытие истории → default «Кратко» и там же → переключение «Подробно» → снова 0 запросов → disclaimer виден в обоих режимах → оценка/результат/ссылка «Добавить в дневник» продолжают работать → F5 → режим корректно сбрасывается к default → chart/news/watchlist не сломаны); тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**`/весь `backend/**` не изменены.
 
-## 4d. Предыдущая ревью-задача (теперь завершена)
+## 4e. Предыдущая ревью-задача (теперь завершена)
 
 Trade Journal Vertical Slice (ветка `feat/trade-journal`) — FR-030 (базовый дневник сделок), UJ-017 (создание записи, опционально со ссылкой на ранее сформированный инсайт).
 
@@ -138,7 +151,7 @@ Trade Journal Vertical Slice (ветка `feat/trade-journal`) — FR-030 (ба�
 
 Реально проверено: `pytest -v` → 391 passed, 31 skipped (без регрессий, было 344/23); `mypy src tests` → чисто (92 файла); `alembic current` → `0005_journal_entries (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл + FK-constraint подтверждены; AI-файлы не менялись — offline/live evaluation не запускались повторно (не требовалось, обосновано); полная real-browser верификация (Дневник-ссылка на главной → генерация+сохранение инсайта → «Добавить в дневник» → форма предзаполнена ticker+insight_id → создание записи → F5 → запись сохранилась → вторая независимая запись → редактирование → F5 → правка сохранилась, «(изменено)» показано → нет кнопки/эндпоинта удаления → watchlist/chart/news/AI/история инсайтов продолжают работать); тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4e. Ревью-задача до предыдущей (тоже завершена)
+## 4f. Ревью-задача до предыдущей (тоже завершена)
 
 Insight Evaluation & Outcome Tracking Vertical Slice (ветка `feat/insight-evaluation`) — закрывает последний шаг канонического MVP-сценария (`PRODUCT_SCOPE.md` §21: «...сформировать инсайт → увидеть источники → сохранить → **оценить**»): FR-035 (пользовательская оценка сохранённого инсайта), FR-036/FR-038 (ручная фиксация результата, неразрывно связанная с исходным инсайтом).
 
@@ -154,7 +167,7 @@ Insight Evaluation & Outcome Tracking Vertical Slice (ветка `feat/insight-e
 
 Реально проверено: `pytest -v` → 344 passed, 23 skipped (без регрессий, было 309/18); `mypy src tests` → чисто (85 файлов); `alembic current` → `0004_insight_evaluations (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл + FK-constraint подтверждены; AI-файлы не менялись — offline/live evaluation не запускались повторно (не требовалось, обосновано); полная real-browser верификация (generate → save → history → evaluate → F5 → оценка сохранилась → outcome → F5 → результат сохранился → provenance/содержимое исходного инсайта не изменились → вторая независимая запись без унаследованной оценки/результата → watchlist/chart/news/search продолжают работать), включая honest recovery от двух реальных Twelve Data rate-limit окон; тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4f. Более ранняя ревью-задача (тоже завершена)
+## 4g. Более ранняя ревью-задача (тоже завершена)
 
 Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insight-persistence`) — доводит существующий Instrument AI Analysis до обязательных MVP-требований: FR-018 (10 обязательных секций insight), FR-019 (явный категориальный confidence), FR-034 (persistence + история инсайтов), FR-011 (минимальный source attribution ключевых фактов), ADR-0004/ADR-0007 provenance requirements.
 
@@ -170,7 +183,7 @@ Insight Persistence & Structure Completion Vertical Slice (ветка `feat/insi
 
 Реально проверено: `pytest -v` → 309 passed, 18 skipped (без регрессий); `mypy src tests` → чисто (72 файла); `alembic current` → `0003_insights (head)` против реальной Compose PostgreSQL, upgrade/downgrade/upgrade цикл подтверждён, `watchlist_items` не тронута; offline evaluation → 12/12, 0 violations; live evaluation (opt-in) → 3/3, 0 violations; полная real-browser верификация (generate → структура/confidence → save → F5 → история сохраняется → detail с provenance → вторая генерация/сохранение → newest-first → chart/news/search/watchlist продолжают работать), тестовые данные и dev-серверы очищены; `frontend/package.json`/`package-lock.json`/`compose.yaml`/`docs/DOCUMENT_REGISTER.md`/`docs/decisions/**` не изменены.
 
-## 4g. Ещё более ранняя ревью-задача (тоже завершена)
+## 4h. Ещё более ранняя ревью-задача (тоже завершена)
 
 AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) — первый, намеренно небольшой, воспроизводимый evaluation harness для уже существующего `GenerateInstrumentAnalysis` (ADR-0007 §52 явно требует evaluation dataset до дальнейшего расширения production-использования модели). **Не пользовательская фича** — frontend не менялся вообще, ничего не выполняется в браузере, ничего не вызывает market/news provider:
 
@@ -253,17 +266,17 @@ AI Quality Evaluation Vertical Slice (ветка `feat/ai-quality-evaluation`) �
 
 ## 7. Последняя завершённая задача
 
-Phase 1 — Application Shell & Intelligence Workspace (PR #47) — завершена и смёржена в `main` (раздел 4a).
+Phase 2.0 — Global Intelligence & Forecast Contract Ratification (PR #48) — завершена и смёржена в `main` (раздел 4a).
 
 ## 8. Текущая задача
 
-Phase 2.0 — Global Intelligence & Forecast Contract Ratification (ветка `docs/phase2-global-intelligence-forecast-contract`) — документационная задача, оформляющая PO-2.0-1 – PO-2.0-13 (раздел 4); реализовано и провалидировано на уровне документов, **намеренно не закоммичено**. Ожидает валидационного прохода и явного разрешения Product Owner на commit согласно `GIT_WORKFLOW.md`. Ни один production-файл (backend/frontend/миграции/prompt/schema/jobs) не изменён.
+Phase 2A — News Intelligence (ветка `feature/news-intelligence`) — реализация FR-064/UJ-034 (раздел 4); реализовано (backend + frontend + миграция) и полностью провалидировано, включая real-browser и живые вызовы Finnhub/xAI, **намеренно не закоммичено**. Ожидает ревью и явного разрешения Product Owner на commit согласно `GIT_WORKFLOW.md`. **Phase 2B (реализация Forecast Contract, `FORECAST_CONTRACT.md`) не начата.**
 
 ## 9. Следующий планируемый блок
 
-**Не определён.** Продолжение работы над продуктом — предмет отдельного, ещё не принятого решения Product Owner после ревью и commit/merge Phase 2.0 (раздел 4). Настоящий документ не называет и не подразумевает ни один конкретный следующий пакет как одобренный или приоритетный.
+**Не определён.** Продолжение работы над продуктом — предмет отдельного, ещё не принятого решения Product Owner после ревью и commit/merge Phase 2A (раздел 4). Настоящий документ не называет и не подразумевает ни один конкретный следующий пакет как одобренный или приоритетный. Вероятный кандидат (не одобрен этим документом) — Phase 2B: реализация Forecast Contract (FR-061/FR-062) поверх уже утверждённого концептуального документа `FORECAST_CONTRACT.md` — **реализация не начата ни в каком виде**.
 
-Справочно, без ранжирования и без статуса решения: реальное провайдерское исследование остаётся не запланированным по трём направлениям — Forex/Crypto/Commodities (`ADR-0011`, Phase 0), и, добавлено Phase 2.0, глобальные акции EU/Asia и индексы/ставки/макро/календарь/фундаментальные данные/News (`TECHNOLOGY_EVALUATION.md`, §14.4) — все требуют отдельного решения Product Owner о привлечении Solution Architect. Владение логикой мониторинга состояния тезиса (`jobs`/`evaluations`/отдельный модуль `monitoring`) остаётся открытым вопросом (`ADR-0012`, раздел 28; `MODULE_BOUNDARIES.md`) — возможный `ADR-0013` не создан. Settings и Notes CRUD остаются неутверждёнными для реализации (сознательно исключены из объёма Phase 1, раздел 4a) и по-прежнему отсутствуют в навигации приложения, что соответствует `INFORMATION_ARCHITECTURE.md`. Ни одна возможность Phase 2.0 (Forecast Contract, непрерывный мониторинг, News Intelligence, глобальные акции/контекст) не реализована в production-коде. MVP в целом не считается завершённым.
+Справочно, без ранжирования и без статуса решения: реальное провайдерское исследование остаётся не запланированным по трём направлениям — Forex/Crypto/Commodities (`ADR-0011`, Phase 0), и глобальные акции EU/Asia и индексы/ставки/макро/календарь/фундаментальные данные (`TECHNOLOGY_EVALUATION.md`, §14.4) — все требуют отдельного решения Product Owner о привлечении Solution Architect. Владение логикой мониторинга состояния тезиса (`jobs`/`evaluations`/отдельный модуль `monitoring`) остаётся открытым вопросом (`ADR-0012`, раздел 28; `MODULE_BOUNDARIES.md`) — возможный `ADR-0013` не создан. Settings и Notes CRUD остаются неутверждёнными для реализации (сознательно исключены из объёма Phase 1, раздел 4b) и по-прежнему отсутствуют в навигации приложения, что соответствует `INFORMATION_ARCHITECTURE.md`. Forecast Contract, непрерывный фоновый мониторинг и глобальные акции/контекст остаются одобренным направлением без реализации; News Intelligence — единственная из возможностей Phase 2.0 с начатой (не закоммиченной) реализацией, раздел 4. MVP в целом не считается завершённым.
 
 ## 10. Обязательные документы для чтения перед любой задачей
 
@@ -283,13 +296,16 @@ Phase 2.0 — Global Intelligence & Forecast Contract Ratification (ветка `
 ## 12. Известные проблемы
 
 - стратегия векторного поиска и остальной технологический стек не утверждены;
-- конкретные источники данных, лицензии и стоимость доступа не утверждены; для Forex/Crypto/Commodities рамка оценки зафиксирована (`TECHNOLOGY_EVALUATION.md`, раздел 14), но реальное исследование провайдеров не проводилось — `ADR-0011` остаётся Черновиком (раздел 4b);
-- точные временные диапазоны горизонта анализа SHORT/MEDIUM/LONG утверждены Phase 2.0 (PO-2.0-3, раздел 4), но точное минимальное окно данных для каждого — намеренно не утверждено, требует суждения Solution Architect (`FORECAST_CONTRACT.md`, раздел 7; `TARGET_INTELLIGENCE_CONTEXT.md`, §2.3);
-- более богатая структура инсайта (forward catalysts, invalidation conditions и т. д., PO-5, Phase 0) согласована по направлению; Phase 2.0 добавила концептуальный Forecast/Thesis Contract (`FORECAST_CONTRACT.md`) поверх того же направления — ни FR-018, ни схема, ни prompt, ни evaluation dataset не изменены ни одной из этих задач;
-- learning/calibration roadmap — поэтапный и явно гейтированный, ратифицирован Phase 2.0 как Stage 0–6 (PO-2.0-12, раздел 4); текущее состояние — только хранение feedback (Stage 0), не calibration/retrieval/adaptation;
-- **(Phase 2.0)** глобальные акции EU/Asia, глобальный рыночный контекст (индексы/ставки/макро), непрерывный фоновый мониторинг, Forecast Contract и News Intelligence одобрены как направление, но не реализованы ни в каком виде — раздел 4;
-- **(Phase 2.0)** владение логикой мониторинга состояния тезиса (`jobs`/`evaluations`/отдельный модуль `monitoring`) остаётся нерешённым — `ADR-0012`, раздел 28; блокирует реализацию DF-022 до отдельного архитектурного решения;
-- **(Phase 2.0)** источники данных для глобальных акций/индексов/ставок/макро/календаря/фундаментальных данных/News не выбраны и не оценены — `TECHNOLOGY_EVALUATION.md`, §14.4, все пункты помечены ожидающими (pending);
+- конкретные источники данных, лицензии и стоимость доступа не утверждены; для Forex/Crypto/Commodities рамка оценки зафиксирована (`TECHNOLOGY_EVALUATION.md`, раздел 14), но реальное исследование провайдеров не проводилось — `ADR-0011` остаётся Черновиком (раздел 4c);
+- точные временные диапазоны горизонта анализа SHORT/MEDIUM/LONG утверждены Phase 2.0 (PO-2.0-3, раздел 4a), но точное минимальное окно данных для каждого — намеренно не утверждено, требует суждения Solution Architect (`FORECAST_CONTRACT.md`, раздел 7; `TARGET_INTELLIGENCE_CONTEXT.md`, §2.3);
+- более богатая структура инсайта (forward catalysts, invalidation conditions и т. д., PO-5, Phase 0) согласована по направлению; Phase 2.0 добавила концептуальный Forecast/Thesis Contract (`FORECAST_CONTRACT.md`) поверх того же направления — ни FR-018, ни схема, ни prompt, ни evaluation dataset не изменены ни одной из этих задач; **Phase 2B (реализация Forecast Contract) не начата**;
+- learning/calibration roadmap — поэтапный и явно гейтированный, ратифицирован Phase 2.0 как Stage 0–6 (PO-2.0-12, раздел 4a); текущее состояние — только хранение feedback (Stage 0), не calibration/retrieval/adaptation;
+- глобальные акции EU/Asia, глобальный рыночный контекст (индексы/ставки/макро), непрерывный фоновый мониторинг и Forecast Contract остаются одобренным Phase 2.0 направлением без реализации (раздел 4a) — News Intelligence (раздел 4) единственная из возможностей Phase 2.0 с начатой реализацией;
+- владение логикой мониторинга состояния тезиса (`jobs`/`evaluations`/отдельный модуль `monitoring`) остаётся нерешённым — `ADR-0012`, раздел 28; блокирует реализацию DF-022 до отдельного архитектурного решения;
+- источники данных для глобальных акций/индексов/ставок/макро/календаря/фундаментальных данных не выбраны и не оценены — `TECHNOLOGY_EVALUATION.md`, §14.4, все пункты помечены ожидающими (pending);
+- **(Phase 2A)** News Intelligence AI-evaluation harness (`ai/evaluation/news_dataset.py`/`news_evaluators.py`/`news_runner.py`) не встроен в существующий CLI/`report.py` — структурно завязаны на `InstrumentAnalysis`, обобщение отложено как последующий небольшой шаг;
+- **(Phase 2A)** `GET /instruments/{ticker}/news` теперь требует БД (503 при неконфигурированной) — поведенческое изменение относительно всех задач до Phase 2A, где этот endpoint был DB-free;
+- **(Phase 2A)** точный порог «существенности» отраслевой/рыночной релевантности не формализован числовым порогом — классификация полностью на LLM (company/sector/market/macro/indirect/noise), без детерминированного numeric score, по прямому требованию задачи;
 - количественные NFR требуют измерений;
 - CI отсутствует.
 

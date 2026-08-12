@@ -22,19 +22,19 @@ from trading_ai.ai.types import (
     ConfidenceLevel,
     InstrumentAnalysis,
     KeyFact,
+    NewsRelationship,
+    NewsRelevance,
 )
 from trading_ai.api.routes.instruments import (
     get_generate_instrument_analysis_use_case,
     get_instrument_details_use_case,
-    get_instrument_news_use_case,
     get_instrument_price_history_use_case,
+    get_news_intelligence_use_case,
     get_search_instruments_use_case,
 )
 from trading_ai.main import create_app
 from trading_ai.market_data.types import (
     InstrumentHistoryPeriod,
-    InstrumentNews,
-    InstrumentNewsItem,
     InstrumentSearchResult,
     InstrumentSnapshot,
     InvalidPeriodError,
@@ -46,6 +46,7 @@ from trading_ai.market_data.types import (
     PricePoint,
     TickerUnsupportedError,
 )
+from trading_ai.news_intelligence.domain import CuratedNews, CuratedNewsItem
 from trading_ai.watchlist.domain import InvalidTickerError
 
 _FAKE_API_KEY = "test-secret-key-should-never-leak"
@@ -398,15 +399,24 @@ def test_get_instrument_price_history_response_never_contains_api_key() -> None:
 _FAKE_NEWS_API_KEY = "test-finnhub-secret-should-never-leak"
 
 
-class _FakeGetInstrumentNews:
-    def __init__(
-        self, result: InstrumentNews | None = None, error: Exception | None = None
-    ) -> None:
+class _FakeGetNewsIntelligence:
+    """Fakes the *combined* `GetNewsIntelligence` use case (Phase 2A) —
+    overriding it directly (`get_news_intelligence_use_case`) sidesteps
+    the real dependency chain entirely (DB session, optional AI gateway,
+    search use case), the same way `_FakeGetInstrumentNews`/
+    `_override_news` used to sidestep `get_news_gateway` for the old
+    raw-pass-through endpoint. `error`, when set, is raised from
+    `execute` exactly as the real use case would propagate a failure
+    from its own inner `news_use_case.execute` call (e.g. Finnhub
+    unavailable) — the API-level exception handlers don't care which
+    layer raised it."""
+
+    def __init__(self, result: CuratedNews | None = None, error: Exception | None = None) -> None:
         self._result = result
         self._error = error
         self.received_ticker: str | None = None
 
-    async def execute(self, raw_ticker: str) -> InstrumentNews:
+    async def execute(self, raw_ticker: str) -> CuratedNews:
         self.received_ticker = raw_ticker
         if self._error is not None:
             raise self._error
@@ -414,29 +424,39 @@ class _FakeGetInstrumentNews:
         return self._result
 
 
-def _override_news(app: FastAPI, fake_use_case: _FakeGetInstrumentNews) -> None:
-    app.dependency_overrides[get_instrument_news_use_case] = lambda: fake_use_case
+def _override_news(app: FastAPI, fake_use_case: _FakeGetNewsIntelligence) -> None:
+    app.dependency_overrides[get_news_intelligence_use_case] = lambda: fake_use_case
 
 
-def _sample_news(items: tuple[InstrumentNewsItem, ...] | None = None) -> InstrumentNews:
+def _sample_curated_item(**overrides: object) -> CuratedNewsItem:
+    fields: dict[str, object] = {
+        "id": "141175994",
+        "ticker": "AAPL",
+        "headline": "Apple unveils new product line",
+        "source": "Reuters",
+        "published_at": datetime(2026, 8, 10, 15, 20, 0, tzinfo=timezone.utc),
+        "url": "https://finnhub.io/api/news?id=abc123",
+        "summary": "Apple announced several new products today.",
+        "enriched": True,
+        "summary_ru": "Apple представила новую линейку продуктов.",
+        "why_it_matters": "Новая продуктовая линейка может повлиять на выручку компании.",
+        "relevance": NewsRelevance.HIGH,
+        "relationship": NewsRelationship.COMPANY,
+        "impact_hypothesis": "Возможное умеренно позитивное влияние при успешных продажах.",
+    }
+    fields.update(overrides)
+    return CuratedNewsItem(**fields)  # type: ignore[arg-type]
+
+
+def _sample_curated_news(items: tuple[CuratedNewsItem, ...] | None = None) -> CuratedNews:
     if items is None:
-        items = (
-            InstrumentNewsItem(
-                id="141175994",
-                ticker="AAPL",
-                headline="Apple unveils new product line",
-                source="Reuters",
-                published_at=datetime(2026, 8, 10, 15, 20, 0, tzinfo=timezone.utc),
-                url="https://finnhub.io/api/news?id=abc123",
-                summary="Apple announced several new products today.",
-            ),
-        )
-    return InstrumentNews(ticker="AAPL", source="finnhub", items=items)
+        items = (_sample_curated_item(),)
+    return CuratedNews(ticker="AAPL", source="finnhub", items=items)
 
 
-def test_get_instrument_news_success_returns_items() -> None:
+def test_get_instrument_news_success_returns_enriched_items() -> None:
     app = create_app()
-    fake_use_case = _FakeGetInstrumentNews(result=_sample_news())
+    fake_use_case = _FakeGetNewsIntelligence(result=_sample_curated_news())
     _override_news(app, fake_use_case)
     client = TestClient(app)
 
@@ -452,21 +472,50 @@ def test_get_instrument_news_success_returns_items() -> None:
     assert item["source"] == "Reuters"
     assert item["url"] == "https://finnhub.io/api/news?id=abc123"
     assert item["summary"] == "Apple announced several new products today."
+    assert item["enriched"] is True
+    assert item["summary_ru"] == "Apple представила новую линейку продуктов."
+    assert item["why_it_matters"] != ""
+    assert item["relevance"] == "high"
+    assert item["relationship"] == "company"
+    assert item["impact_hypothesis"] != ""
     assert fake_use_case.received_ticker == "AAPL"
+
+
+def test_get_instrument_news_unenriched_item_has_null_ai_fields() -> None:
+    """Degraded representation (task scope §16) — `enriched=False`
+    means every AI-enrichment field is `None`, never a fabricated
+    placeholder, while the deterministic fields stay populated."""
+    app = create_app()
+    item = _sample_curated_item(
+        enriched=False,
+        summary_ru=None,
+        why_it_matters=None,
+        relevance=None,
+        relationship=None,
+        impact_hypothesis=None,
+    )
+    _override_news(app, _FakeGetNewsIntelligence(result=_sample_curated_news(items=(item,))))
+    client = TestClient(app)
+
+    response = client.get("/instruments/AAPL/news")
+
+    assert response.status_code == 200
+    body_item = response.json()["items"][0]
+    assert body_item["enriched"] is False
+    assert body_item["summary_ru"] is None
+    assert body_item["why_it_matters"] is None
+    assert body_item["relevance"] is None
+    assert body_item["relationship"] is None
+    assert body_item["impact_hypothesis"] is None
+    # Deterministic fields survive degradation unchanged.
+    assert body_item["headline"] == "Apple unveils new product line"
+    assert body_item["url"] == "https://finnhub.io/api/news?id=abc123"
 
 
 def test_get_instrument_news_summary_missing_is_null_not_empty_string() -> None:
     app = create_app()
-    item = InstrumentNewsItem(
-        id="1",
-        ticker="AAPL",
-        headline="Headline",
-        source="Reuters",
-        published_at=datetime.now(timezone.utc),
-        url="https://example.com/a",
-        summary=None,
-    )
-    _override_news(app, _FakeGetInstrumentNews(result=_sample_news(items=(item,))))
+    item = _sample_curated_item(summary=None)
+    _override_news(app, _FakeGetNewsIntelligence(result=_sample_curated_news(items=(item,))))
     client = TestClient(app)
 
     response = client.get("/instruments/AAPL/news")
@@ -476,8 +525,10 @@ def test_get_instrument_news_summary_missing_is_null_not_empty_string() -> None:
 
 
 def test_get_instrument_news_empty_response_returns_200_with_empty_items() -> None:
+    """A curated, honest empty state — no relevant news is a valid
+    result, not an error (task scope §15)."""
     app = create_app()
-    _override_news(app, _FakeGetInstrumentNews(result=_sample_news(items=())))
+    _override_news(app, _FakeGetNewsIntelligence(result=_sample_curated_news(items=())))
     client = TestClient(app)
 
     response = client.get("/instruments/AAPL/news")
@@ -489,7 +540,7 @@ def test_get_instrument_news_empty_response_returns_200_with_empty_items() -> No
 def test_get_instrument_news_invalid_ticker_returns_422() -> None:
     app = create_app()
     _override_news(
-        app, _FakeGetInstrumentNews(error=InvalidTickerError("ticker must not be empty"))
+        app, _FakeGetNewsIntelligence(error=InvalidTickerError("ticker must not be empty"))
     )
     client = TestClient(app)
 
@@ -499,8 +550,11 @@ def test_get_instrument_news_invalid_ticker_returns_422() -> None:
 
 
 def test_get_instrument_news_timeout_returns_504() -> None:
+    """Finnhub failure propagates unchanged through `GetNewsIntelligence`
+    — the enrichment layer never masks a raw-provider failure (task
+    scope §16: "Finnhub fails" is a hard failure, unlike "LLM fails")."""
     app = create_app()
-    _override_news(app, _FakeGetInstrumentNews(error=MarketDataTimeoutError("slow")))
+    _override_news(app, _FakeGetNewsIntelligence(error=MarketDataTimeoutError("slow")))
     client = TestClient(app)
 
     response = client.get("/instruments/AAPL/news")
@@ -511,7 +565,7 @@ def test_get_instrument_news_timeout_returns_504() -> None:
 def test_get_instrument_news_rate_limited_or_unavailable_returns_503() -> None:
     app = create_app()
     for error in (MarketDataRateLimitedError("limit"), MarketDataUnavailableError("boom")):
-        _override_news(app, _FakeGetInstrumentNews(error=error))
+        _override_news(app, _FakeGetNewsIntelligence(error=error))
         client = TestClient(app)
 
         response = client.get("/instruments/AAPL/news")
@@ -531,9 +585,26 @@ def test_get_instrument_news_without_provider_configured_returns_503(
     assert response.status_code == 503
 
 
+def test_get_instrument_news_without_database_configured_returns_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 2A behavior change (task scope §10, §13): unlike before
+    this task, the news endpoint now requires a database connection —
+    it is the persisted reuse cache, not optional decoration. Deleting
+    `TRADING_AI_DATABASE_URL` must 503 even though Finnhub/xAI keys are
+    untouched, same hard-dependency pattern already established for
+    `/insights`/`/journal`."""
+    monkeypatch.delenv("TRADING_AI_DATABASE_URL", raising=False)
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/instruments/AAPL/news")
+
+    assert response.status_code == 503
+
+
 def test_get_instrument_news_response_never_contains_api_key_or_provider_url() -> None:
     app = create_app()
-    _override_news(app, _FakeGetInstrumentNews(result=_sample_news()))
+    _override_news(app, _FakeGetNewsIntelligence(result=_sample_curated_news()))
     client = TestClient(app)
 
     response = client.get("/instruments/AAPL/news")
