@@ -123,6 +123,51 @@ async def test_save_insight_success_flow() -> None:
 
 
 @pytest.mark.anyio
+async def test_save_insight_carries_forecast_fields_through_to_new_insight() -> None:
+    """Phase 2B — save/load round trip (task scope §22): every forecast
+    field on a generated `InstrumentAnalysis` reaches `NewInsight`
+    unchanged, not just the original FR-018 fields."""
+    from trading_ai.ai.types import AnalysisHorizon, DirectionalView, ForecastState
+
+    analysis = InstrumentAnalysis(
+        ticker="AAPL",
+        generated_at=_T,
+        summary="s", price_context="p", news_context="n",
+        key_facts=(KeyFact(fact="f", source="Текущая котировка"),),
+        insight_hypothesis="h",
+        confidence=ConfidenceLevel.HIGH,
+        confidence_reason="cr",
+        considerations=("c",), risks=("r",), key_drivers=("kd",),
+        data_freshness="df", source_data_as_of=_T, disclaimer="d",
+        provider="xai", model="grok-4.5",
+        prompt_version="instrument-analysis-v3-forecast",
+        schema_version="insight-structure-v2-forecast",
+        horizon=AnalysisHorizon.LONG,
+        forecast_state=ForecastState.FORECAST,
+        directional_view=DirectionalView.BEARISH,
+        concise_verdict="verdict",
+        base_case="base", bullish_case="bull", bearish_case="bear",
+        catalysts=("c1",), invalidation_conditions=("i1",), what_to_watch_next=("w1",),
+        check_after=_T, uncertainty="u", context_categories_used=("identity", "price"),
+    )
+    repository = FakeInsightRepository()
+    cache = PendingAnalysisCache()
+    token = cache.put("AAPL", analysis)
+    use_case = SaveInsight(repository, cache)
+
+    await use_case.execute("AAPL", token)
+
+    added = repository.added[0]
+    assert added.horizon == AnalysisHorizon.LONG
+    assert added.forecast_state == ForecastState.FORECAST
+    assert added.directional_view == DirectionalView.BEARISH
+    assert added.catalysts == ("c1",)
+    assert added.invalidation_conditions == ("i1",)
+    assert added.check_after == _T
+    assert added.uncertainty == "u"
+
+
+@pytest.mark.anyio
 async def test_save_insight_normalizes_ticker() -> None:
     repository = FakeInsightRepository()
     cache = PendingAnalysisCache()

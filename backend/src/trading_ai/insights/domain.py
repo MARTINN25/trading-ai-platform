@@ -18,7 +18,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from trading_ai.ai.types import ConfidenceLevel, KeyFact
+from trading_ai.ai.types import (
+    AnalysisHorizon,
+    ConfidenceLevel,
+    DirectionalView,
+    ForecastState,
+    KeyFact,
+)
 
 
 class InsightError(Exception):
@@ -48,7 +54,11 @@ class NewInsight:
     """Everything the repository needs to insert one row — assembled by
     `SaveInsight` (`use_cases.py`) exclusively from a server-held
     `InstrumentAnalysis` (never from client-supplied request fields,
-    task scope §12)."""
+    task scope §12).
+
+    Phase 2B: forecast fields below mirror `InstrumentAnalysis`'s own
+    additive fields one-for-one (`ai/types.py`) — `None`/`()` for a
+    generation that predates this task, always populated for a new one."""
 
     ticker: str
     generated_at: datetime
@@ -69,11 +79,31 @@ class NewInsight:
     model: str
     prompt_version: str
     schema_version: str
+    horizon: AnalysisHorizon | None = None
+    forecast_state: ForecastState | None = None
+    directional_view: DirectionalView | None = None
+    concise_verdict: str | None = None
+    base_case: str | None = None
+    bullish_case: str | None = None
+    bearish_case: str | None = None
+    catalysts: tuple[str, ...] = ()
+    invalidation_conditions: tuple[str, ...] = ()
+    what_to_watch_next: tuple[str, ...] = ()
+    check_after: datetime | None = None
+    uncertainty: str | None = None
+    context_categories_used: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class SavedInsight:
-    """One immutable, persisted insight row — the application/API-facing shape."""
+    """One immutable, persisted insight row — the application/API-facing shape.
+
+    Phase 2B: forecast fields below are `None`/`()` for any row saved
+    before this task (`schema_version == "insight-structure-v1"`) — a
+    reader (API/frontend) checks `horizon is not None` (equivalently
+    `forecast_state is not None`) to know whether the Forecast Contract
+    block applies to this particular row at all, never inferring it
+    from `schema_version` string-matching."""
 
     id: int
     ticker: str
@@ -96,6 +126,19 @@ class SavedInsight:
     model: str
     prompt_version: str
     schema_version: str
+    horizon: AnalysisHorizon | None = None
+    forecast_state: ForecastState | None = None
+    directional_view: DirectionalView | None = None
+    concise_verdict: str | None = None
+    base_case: str | None = None
+    bullish_case: str | None = None
+    bearish_case: str | None = None
+    catalysts: tuple[str, ...] = ()
+    invalidation_conditions: tuple[str, ...] = ()
+    what_to_watch_next: tuple[str, ...] = ()
+    check_after: datetime | None = None
+    uncertainty: str | None = None
+    context_categories_used: tuple[str, ...] = ()
 
 
 # Bounded history (task scope §14: "не делать infinite scroll... Максимум

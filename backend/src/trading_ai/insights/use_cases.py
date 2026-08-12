@@ -64,6 +64,19 @@ def _to_new_insight(analysis: InstrumentAnalysis) -> NewInsight:
         model=analysis.model,
         prompt_version=analysis.prompt_version,
         schema_version=analysis.schema_version,
+        horizon=analysis.horizon,
+        forecast_state=analysis.forecast_state,
+        directional_view=analysis.directional_view,
+        concise_verdict=analysis.concise_verdict,
+        base_case=analysis.base_case,
+        bullish_case=analysis.bullish_case,
+        bearish_case=analysis.bearish_case,
+        catalysts=analysis.catalysts,
+        invalidation_conditions=analysis.invalidation_conditions,
+        what_to_watch_next=analysis.what_to_watch_next,
+        check_after=analysis.check_after,
+        uncertainty=analysis.uncertainty,
+        context_categories_used=analysis.context_categories_used,
     )
 
 

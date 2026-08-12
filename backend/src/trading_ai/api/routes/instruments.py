@@ -20,13 +20,17 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from trading_ai.ai.gateway import XAIGateway
+from trading_ai.ai.horizon import InvalidHorizonError, parse_horizon
 from trading_ai.ai.pending_cache import PendingAnalysisCache
 from trading_ai.ai.types import (
     AIAnalysisError,
     AIInsufficientDataError,
     AIRateLimitedError,
     AITimeoutError,
+    AnalysisHorizon,
     ConfidenceLevel,
+    DirectionalView,
+    ForecastState,
 )
 from trading_ai.ai.use_cases import GenerateInstrumentAnalysis
 from trading_ai.infrastructure.database.session import session_scope
@@ -207,6 +211,15 @@ class InstrumentAnalysisResponse(BaseModel):
     `analysis_token` is the *only* thing the client may send back to
     `POST /instruments/{ticker}/insights` to save this exact result —
     the client never resends analysis content itself (task scope §12).
+
+    Phase 2B (Forecast Contract, FR-061/FR-062): fields from `horizon`
+    onward are new, additive to the response shape above (task scope
+    §7). `key_facts` doubles as the Forecast Contract's "evidence"
+    field (`docs/architecture/FORECAST_CONTRACT.md` §3 explicitly maps
+    "Ключевые факты" -> evidence) — not duplicated under a second field
+    name. `directional_view`/`base_case`/`bullish_case`/`bearish_case`
+    are `None` and `catalysts`/`invalidation_conditions` are empty
+    whenever `forecast_state` is not `"forecast"` (task scope §12).
     """
 
     ticker: str
@@ -225,12 +238,32 @@ class InstrumentAnalysisResponse(BaseModel):
     disclaimer: str
     source: str
     analysis_token: str
+    horizon: AnalysisHorizon
+    forecast_state: ForecastState
+    directional_view: DirectionalView | None
+    concise_verdict: str
+    base_case: str | None
+    bullish_case: str | None
+    bearish_case: str | None
+    catalysts: list[str]
+    invalidation_conditions: list[str]
+    what_to_watch_next: list[str]
+    check_after: datetime
+    uncertainty: str
+    context_categories_used: list[str]
 
 
 class InsightSummaryResponse(BaseModel):
     """Compact history-list item (task scope §14) — full content is
     fetched on demand via `GET /insights/{id}`, not embedded here, to
-    keep the list payload small."""
+    keep the list payload small.
+
+    Phase 2B (task scope §17): `horizon`/`forecast_state`/
+    `directional_view`/`concise_verdict` let the history list show a
+    forecast insight's verdict at a glance without a second fetch —
+    all four `None` for a pre-Phase-2B row (`schema_version ==
+    "insight-structure-v1"`), same optionality as everywhere else.
+    """
 
     id: int
     ticker: str
@@ -238,6 +271,10 @@ class InsightSummaryResponse(BaseModel):
     created_at: datetime
     confidence: ConfidenceLevel
     summary: str
+    horizon: AnalysisHorizon | None = None
+    forecast_state: ForecastState | None = None
+    directional_view: DirectionalView | None = None
+    concise_verdict: str | None = None
 
 
 class InstrumentInsightsResponse(BaseModel):
@@ -255,7 +292,12 @@ class RecentInsightsResponse(BaseModel):
 
 class InsightDetailResponse(BaseModel):
     """Full persisted insight — returned by both the save endpoint and
-    `GET /insights/{id}`."""
+    `GET /insights/{id}`.
+
+    Phase 2B: fields from `horizon` onward are all `None`/`[]` for a
+    row saved before this task — a client checks `horizon is not null`
+    to know whether to render the Forecast Contract block at all (task
+    scope §17: "old saved insights must still render")."""
 
     id: int
     ticker: str
@@ -277,6 +319,19 @@ class InsightDetailResponse(BaseModel):
     model: str
     prompt_version: str
     schema_version: str
+    horizon: AnalysisHorizon | None = None
+    forecast_state: ForecastState | None = None
+    directional_view: DirectionalView | None = None
+    concise_verdict: str | None = None
+    base_case: str | None = None
+    bullish_case: str | None = None
+    bearish_case: str | None = None
+    catalysts: list[str] = []
+    invalidation_conditions: list[str] = []
+    what_to_watch_next: list[str] = []
+    check_after: datetime | None = None
+    uncertainty: str | None = None
+    context_categories_used: list[str] = []
 
 
 class SaveInsightRequest(BaseModel):
@@ -301,6 +356,10 @@ def _to_insight_summary_response(insight: SavedInsight) -> InsightSummaryRespons
         created_at=insight.created_at,
         confidence=insight.confidence,
         summary=insight.summary,
+        horizon=insight.horizon,
+        forecast_state=insight.forecast_state,
+        directional_view=insight.directional_view,
+        concise_verdict=insight.concise_verdict,
     )
 
 
@@ -328,6 +387,19 @@ def _to_insight_detail_response(insight: SavedInsight) -> InsightDetailResponse:
         model=insight.model,
         prompt_version=insight.prompt_version,
         schema_version=insight.schema_version,
+        horizon=insight.horizon,
+        forecast_state=insight.forecast_state,
+        directional_view=insight.directional_view,
+        concise_verdict=insight.concise_verdict,
+        base_case=insight.base_case,
+        bullish_case=insight.bullish_case,
+        bearish_case=insight.bearish_case,
+        catalysts=list(insight.catalysts),
+        invalidation_conditions=list(insight.invalidation_conditions),
+        what_to_watch_next=list(insight.what_to_watch_next),
+        check_after=insight.check_after,
+        uncertainty=insight.uncertainty,
+        context_categories_used=list(insight.context_categories_used),
     )
 
 
@@ -630,11 +702,21 @@ async def generate_instrument_analysis(
         GenerateInstrumentAnalysis, Depends(get_generate_instrument_analysis_use_case)
     ],
     pending_cache: Annotated[PendingAnalysisCache, Depends(get_pending_analysis_cache)],
+    horizon: Annotated[
+        str,
+        Query(
+            description="SHORT (1-5 trading days) / MEDIUM (~1-8 weeks) / LONG (~2-12 months) — FR-006."
+        ),
+    ],
 ) -> InstrumentAnalysisResponse:
-    """No request body is accepted — the ticker comes from the path only
-    (task scope §6: the endpoint never accepts a free-form prompt).
-    POST, not GET, since this triggers a paid/computational LLM
-    generation call rather than a cached-feeling read (task scope §10).
+    """No request body is accepted — the ticker comes from the path,
+    the horizon from a required query parameter (task scope §6: the
+    endpoint never accepts a free-form prompt; task scope §4/FR-006:
+    horizon is never silently defaulted — its absence is a `422`, the
+    same as an unparseable value, via `InvalidHorizonError`/FastAPI's
+    own required-query-param validation). POST, not GET, since this
+    triggers a paid/computational LLM generation call rather than a
+    cached-feeling read (task scope §10).
 
     Generation and persistence are decoupled (Product Owner decision,
     task scope §2: explicit "Сохранить инсайт" action, not auto-save).
@@ -643,8 +725,12 @@ async def generate_instrument_analysis(
     the client must present back to `POST /instruments/{ticker}/insights`
     to actually save it.
     """
-    analysis = await use_case.execute(ticker)
+    parsed_horizon = parse_horizon(horizon)
+    analysis = await use_case.execute(ticker, parsed_horizon)
     analysis_token = pending_cache.put(analysis.ticker, analysis)
+    assert analysis.horizon is not None
+    assert analysis.forecast_state is not None
+    assert analysis.check_after is not None
     return InstrumentAnalysisResponse(
         ticker=analysis.ticker,
         generated_at=analysis.generated_at,
@@ -664,6 +750,19 @@ async def generate_instrument_analysis(
         disclaimer=analysis.disclaimer,
         source=analysis.provider,
         analysis_token=analysis_token,
+        horizon=analysis.horizon,
+        forecast_state=analysis.forecast_state,
+        directional_view=analysis.directional_view,
+        concise_verdict=analysis.concise_verdict or "",
+        base_case=analysis.base_case,
+        bullish_case=analysis.bullish_case,
+        bearish_case=analysis.bearish_case,
+        catalysts=list(analysis.catalysts),
+        invalidation_conditions=list(analysis.invalidation_conditions),
+        what_to_watch_next=list(analysis.what_to_watch_next),
+        check_after=analysis.check_after,
+        uncertainty=analysis.uncertainty or "",
+        context_categories_used=list(analysis.context_categories_used),
     )
 
 
@@ -815,6 +914,13 @@ def register_instruments_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(InvalidPeriodError)
     async def _handle_invalid_period(_request: Request, exc: InvalidPeriodError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": exc.reason},
+        )
+
+    @app.exception_handler(InvalidHorizonError)
+    async def _handle_invalid_horizon(_request: Request, exc: InvalidHorizonError) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={"detail": exc.reason},

@@ -62,10 +62,31 @@ _REQUEST_TIMEOUT_SECONDS = 5.0
 #   with headroom for holidays/partial sessions.
 # - 1M -> 1day bars, outputsize 25: a calendar month is ~21-23 trading
 #   days; headroom covers holidays.
+# - 3M -> 1day bars, outputsize 70 (Phase 2B, task scope §11): ~63
+#   trading days in a calendar quarter; headroom covers holidays. Added
+#   for horizon-aware analysis evidence windows (`ai/horizon.py`), not
+#   exposed as a chart-UI option — MEDIUM's approved upper bound is ~8
+#   weeks (`FUNCTIONAL_REQUIREMENTS.md` FR-006), so this window gives
+#   comfortable lookback headroom above that bound rather than cutting
+#   it exactly at 8 weeks.
+# - 1Y -> 1day bars, outputsize 260 (Phase 2B): ~252 trading days in a
+#   calendar year; headroom covers holidays. Used for LONG (~2-12
+#   months) — a full calendar year of daily bars is a deliberate,
+#   documented implementation judgment call (`FORECAST_CONTRACT.md` §7
+#   explicitly leaves the exact minimum window to Solution Architect
+#   judgment, not a Product-Owner-fixed number), chosen to be
+#   meaningfully wider than what a 1-month window could honestly
+#   support, per the Product Owner's explicit "not from one month of
+#   history" requirement (FR-006) — not a claim that exactly 252 points
+#   is the correct minimum for every LONG case; `ai/horizon.py`'s
+#   sufficiency gate is the actual enforcement point, this window is
+#   only the fetch request.
 _PERIOD_PROVIDER_PARAMS: dict[InstrumentHistoryPeriod, tuple[str, int]] = {
     InstrumentHistoryPeriod.ONE_DAY: ("5min", 100),
     InstrumentHistoryPeriod.FIVE_DAY: ("1h", 40),
     InstrumentHistoryPeriod.ONE_MONTH: ("1day", 25),
+    InstrumentHistoryPeriod.THREE_MONTH: ("1day", 70),
+    InstrumentHistoryPeriod.ONE_YEAR: ("1day", 260),
 }
 
 # Final cap on what's returned to the caller (task scope §6: "максимум

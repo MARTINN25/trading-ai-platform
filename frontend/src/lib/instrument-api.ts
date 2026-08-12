@@ -118,6 +118,28 @@ export interface InstrumentKeyFact {
  * score (e.g. "83.7%"). */
 export type InstrumentConfidenceLevel = "high" | "medium" | "low";
 
+/** FR-006 — the three Product-Owner-approved analysis horizons
+ * (Phase 2.0, PO-2.0-3). Selected by the user before generation, never
+ * defaulted by this client (task scope §4). */
+export type AnalysisHorizon = "short" | "medium" | "long";
+
+/** PO-2.0-4 — a fixed categorical directional scale, never
+ * BUY/SELL/HOLD (no execution command). */
+export type DirectionalView =
+  | "strongly_bullish"
+  | "bullish"
+  | "neutral"
+  | "bearish"
+  | "strongly_bearish";
+
+/**
+ * `FORECAST_CONTRACT.md` §5, PO-2.0-8 — `no_quality_setup`/
+ * `insufficient_edge`/`insufficient_data` are valid, desired outcomes,
+ * never a fallback for a failed request. The UI must show these states
+ * plainly, never force a directional-looking card over them.
+ */
+export type ForecastState = "forecast" | "no_quality_setup" | "insufficient_edge" | "insufficient_data";
+
 /**
  * FR-018's 10 mandatory insight sections (see backend `ai/types.py`'s
  * `InstrumentAnalysis` docstring for the exact section mapping).
@@ -125,6 +147,14 @@ export type InstrumentConfidenceLevel = "high" | "medium" | "low";
  * `saveInsight` — this client never re-sends analysis content itself
  * (backend task scope §12: the save endpoint never trusts client-
  * supplied provenance).
+ *
+ * Phase 2B (Forecast Contract, FR-061/FR-062): fields from `horizon`
+ * onward are new, additive to the response shape above. `key_facts`
+ * doubles as the Forecast Contract's "evidence" field (`docs/
+ * architecture/FORECAST_CONTRACT.md` §3) — not duplicated under a
+ * second field name. `directional_view`/`base_case`/`bullish_case`/
+ * `bearish_case` are `null` and `catalysts`/`invalidation_conditions`
+ * are empty whenever `forecast_state` is not `"forecast"`.
  */
 export interface InstrumentAiAnalysis {
   ticker: string;
@@ -143,10 +173,29 @@ export interface InstrumentAiAnalysis {
   disclaimer: string;
   source: string;
   analysis_token: string;
+  horizon: AnalysisHorizon;
+  forecast_state: ForecastState;
+  directional_view: DirectionalView | null;
+  concise_verdict: string;
+  base_case: string | null;
+  bullish_case: string | null;
+  bearish_case: string | null;
+  catalysts: string[];
+  invalidation_conditions: string[];
+  what_to_watch_next: string[];
+  check_after: string;
+  uncertainty: string;
+  context_categories_used: string[];
 }
 
 /** Compact history-list item — full content is fetched on demand via
- * `getInsightDetail`, not embedded here (task scope §14). */
+ * `getInsightDetail`, not embedded here (task scope §14).
+ *
+ * Phase 2B (task scope §17): `horizon`/`forecast_state`/
+ * `directional_view`/`concise_verdict` let the history list show a
+ * forecast insight's verdict at a glance — all four `null` for a
+ * pre-Phase-2B row.
+ */
 export interface InsightSummary {
   id: number;
   ticker: string;
@@ -154,6 +203,10 @@ export interface InsightSummary {
   created_at: string;
   confidence: InstrumentConfidenceLevel;
   summary: string;
+  horizon: AnalysisHorizon | null;
+  forecast_state: ForecastState | null;
+  directional_view: DirectionalView | null;
+  concise_verdict: string | null;
 }
 
 export interface InstrumentInsightsResponse {
@@ -170,7 +223,12 @@ export interface RecentInsightsResponse {
 }
 
 /** Full persisted insight — returned by both `saveInsight` and
- * `getInsightDetail`. */
+ * `getInsightDetail`.
+ *
+ * Phase 2B: fields from `horizon` onward are all `null`/`[]` for a row
+ * saved before this task — a component checks `horizon !== null` to
+ * know whether to render the Forecast Contract block at all (task
+ * scope §17: "old saved insights must still render"). */
 export interface InsightDetail {
   id: number;
   ticker: string;
@@ -192,6 +250,19 @@ export interface InsightDetail {
   model: string;
   prompt_version: string;
   schema_version: string;
+  horizon: AnalysisHorizon | null;
+  forecast_state: ForecastState | null;
+  directional_view: DirectionalView | null;
+  concise_verdict: string | null;
+  base_case: string | null;
+  bullish_case: string | null;
+  bearish_case: string | null;
+  catalysts: string[];
+  invalidation_conditions: string[];
+  what_to_watch_next: string[];
+  check_after: string | null;
+  uncertainty: string | null;
+  context_categories_used: string[];
 }
 
 /**
@@ -600,6 +671,41 @@ function isInstrumentConfidenceLevel(value: unknown): value is InstrumentConfide
   return value === "high" || value === "medium" || value === "low";
 }
 
+function isAnalysisHorizon(value: unknown): value is AnalysisHorizon {
+  return value === "short" || value === "medium" || value === "long";
+}
+
+function isNullableAnalysisHorizon(value: unknown): value is AnalysisHorizon | null {
+  return value === null || isAnalysisHorizon(value);
+}
+
+function isDirectionalView(value: unknown): value is DirectionalView {
+  return (
+    value === "strongly_bullish" ||
+    value === "bullish" ||
+    value === "neutral" ||
+    value === "bearish" ||
+    value === "strongly_bearish"
+  );
+}
+
+function isNullableDirectionalView(value: unknown): value is DirectionalView | null {
+  return value === null || isDirectionalView(value);
+}
+
+function isForecastState(value: unknown): value is ForecastState {
+  return (
+    value === "forecast" ||
+    value === "no_quality_setup" ||
+    value === "insufficient_edge" ||
+    value === "insufficient_data"
+  );
+}
+
+function isNullableForecastState(value: unknown): value is ForecastState | null {
+  return value === null || isForecastState(value);
+}
+
 function isInstrumentKeyFact(value: unknown): value is InstrumentKeyFact {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -633,7 +739,20 @@ function isInstrumentAiAnalysis(value: unknown): value is InstrumentAiAnalysis {
     typeof candidate.data_freshness === "string" &&
     typeof candidate.disclaimer === "string" &&
     typeof candidate.source === "string" &&
-    typeof candidate.analysis_token === "string"
+    typeof candidate.analysis_token === "string" &&
+    isAnalysisHorizon(candidate.horizon) &&
+    isForecastState(candidate.forecast_state) &&
+    isNullableDirectionalView(candidate.directional_view) &&
+    typeof candidate.concise_verdict === "string" &&
+    isNullableString(candidate.base_case) &&
+    isNullableString(candidate.bullish_case) &&
+    isNullableString(candidate.bearish_case) &&
+    isStringArray(candidate.catalysts) &&
+    isStringArray(candidate.invalidation_conditions) &&
+    isStringArray(candidate.what_to_watch_next) &&
+    typeof candidate.check_after === "string" &&
+    typeof candidate.uncertainty === "string" &&
+    isStringArray(candidate.context_categories_used)
   );
 }
 
@@ -648,7 +767,11 @@ function isInsightSummary(value: unknown): value is InsightSummary {
     typeof candidate.generated_at === "string" &&
     typeof candidate.created_at === "string" &&
     isInstrumentConfidenceLevel(candidate.confidence) &&
-    typeof candidate.summary === "string"
+    typeof candidate.summary === "string" &&
+    isNullableAnalysisHorizon(candidate.horizon) &&
+    isNullableForecastState(candidate.forecast_state) &&
+    isNullableDirectionalView(candidate.directional_view) &&
+    isNullableString(candidate.concise_verdict)
   );
 }
 
@@ -697,7 +820,20 @@ function isInsightDetail(value: unknown): value is InsightDetail {
     typeof candidate.provider === "string" &&
     typeof candidate.model === "string" &&
     typeof candidate.prompt_version === "string" &&
-    typeof candidate.schema_version === "string"
+    typeof candidate.schema_version === "string" &&
+    isNullableAnalysisHorizon(candidate.horizon) &&
+    isNullableForecastState(candidate.forecast_state) &&
+    isNullableDirectionalView(candidate.directional_view) &&
+    isNullableString(candidate.concise_verdict) &&
+    isNullableString(candidate.base_case) &&
+    isNullableString(candidate.bullish_case) &&
+    isNullableString(candidate.bearish_case) &&
+    isStringArray(candidate.catalysts) &&
+    isStringArray(candidate.invalidation_conditions) &&
+    isStringArray(candidate.what_to_watch_next) &&
+    isNullableString(candidate.check_after) &&
+    isNullableString(candidate.uncertainty) &&
+    isStringArray(candidate.context_categories_used)
   );
 }
 
@@ -711,14 +847,24 @@ function isInsightDetail(value: unknown): value is InsightDetail {
  *
  * No prompt is ever sent — the backend accepts no request body for
  * this endpoint at all (task scope §6).
+ *
+ * Phase 2B (FR-006): `horizon` is a required parameter — this client
+ * never supplies a default; the caller (`AiAnalysisSection.tsx`) only
+ * calls this once the user has explicitly picked SHORT/MEDIUM/LONG.
  */
-export async function generateInstrumentAnalysis(ticker: string): Promise<InstrumentAiAnalysis> {
+export async function generateInstrumentAnalysis(
+  ticker: string,
+  horizon: AnalysisHorizon
+): Promise<InstrumentAiAnalysis> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/instruments/${encodeURIComponent(ticker)}/analysis`, {
-      method: "POST",
-      cache: "no-store",
-    });
+    response = await fetch(
+      `${API_BASE_URL}/instruments/${encodeURIComponent(ticker)}/analysis?horizon=${encodeURIComponent(horizon)}`,
+      {
+        method: "POST",
+        cache: "no-store",
+      }
+    );
   } catch {
     throw new InstrumentApiError(
       "network",
@@ -729,7 +875,7 @@ export async function generateInstrumentAnalysis(ticker: string): Promise<Instru
   if (response.status === 422) {
     throw new InstrumentApiError(
       "invalid",
-      "Некорректный тикер.",
+      "Некорректный тикер или горизонт анализа.",
       await readBackendDetail(response)
     );
   }

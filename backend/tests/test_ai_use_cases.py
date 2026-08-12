@@ -10,6 +10,7 @@ import pytest
 
 from trading_ai.ai.types import (
     AIInsufficientDataError,
+    AnalysisHorizon,
     ConfidenceLevel,
     InstrumentAnalysis,
     InstrumentAnalysisInput,
@@ -185,7 +186,7 @@ async def test_generate_instrument_analysis_success() -> None:
     news = FakeNewsUseCase(result=_news())
     use_case, gateway = _use_case(details, history, news)
 
-    analysis = await use_case.execute("AAPL")
+    analysis = await use_case.execute("AAPL", AnalysisHorizon.SHORT)
 
     assert analysis.ticker == "AAPL"
     assert gateway.received_input is not None
@@ -202,7 +203,7 @@ async def test_generate_instrument_analysis_normalizes_ticker() -> None:
     news = FakeNewsUseCase(result=_news())
     use_case, gateway = _use_case(details, history, news)
 
-    await use_case.execute("  aapl  ")
+    await use_case.execute("  aapl  ", AnalysisHorizon.SHORT)
 
     assert details.received_ticker == "AAPL"
     assert history.received_args == ("AAPL", "1M")
@@ -219,7 +220,7 @@ async def test_generate_instrument_analysis_invalid_ticker_raises_before_any_cal
     use_case, gateway = _use_case(details, history, news)
 
     with pytest.raises(InvalidTickerError):
-        await use_case.execute("")
+        await use_case.execute("", AnalysisHorizon.SHORT)
 
     assert details.received_ticker is None
     assert gateway.received_input is None
@@ -232,7 +233,7 @@ async def test_generate_instrument_analysis_degraded_when_news_unavailable() -> 
     news = FakeNewsUseCase(error=MarketDataUnavailableError("boom"))
     use_case, gateway = _use_case(details, history, news)
 
-    analysis = await use_case.execute("AAPL")
+    analysis = await use_case.execute("AAPL", AnalysisHorizon.SHORT)
 
     assert analysis.ticker == "AAPL"
     assert gateway.received_input is not None
@@ -250,7 +251,7 @@ async def test_generate_instrument_analysis_degraded_when_news_not_configured() 
     history = FakeHistoryUseCase(result=_history())
     use_case, gateway = _use_case(details, history, news=None)
 
-    analysis = await use_case.execute("AAPL")
+    analysis = await use_case.execute("AAPL", AnalysisHorizon.SHORT)
 
     assert analysis.ticker == "AAPL"
     assert gateway.received_input is not None
@@ -264,7 +265,7 @@ async def test_generate_instrument_analysis_degraded_when_history_unavailable() 
     news = FakeNewsUseCase(result=_news())
     use_case, gateway = _use_case(details, history, news)
 
-    analysis = await use_case.execute("AAPL")
+    analysis = await use_case.execute("AAPL", AnalysisHorizon.SHORT)
 
     assert analysis.ticker == "AAPL"
     assert gateway.received_input is not None
@@ -281,7 +282,7 @@ async def test_generate_instrument_analysis_insufficient_data_when_quote_unavail
     use_case, gateway = _use_case(details, history, news)
 
     with pytest.raises(AIInsufficientDataError):
-        await use_case.execute("AAPL")
+        await use_case.execute("AAPL", AnalysisHorizon.SHORT)
 
     # The LLM gateway must never be called with zero real facts.
     assert gateway.received_input is None
@@ -301,7 +302,7 @@ async def test_generate_instrument_analysis_provider_error_propagates_from_gatew
     use_case = GenerateInstrumentAnalysis(details, history, news, _FailingAIGateway())
 
     with pytest.raises(MarketDataUnavailableError):
-        await use_case.execute("AAPL")
+        await use_case.execute("AAPL", AnalysisHorizon.SHORT)
 
 
 @pytest.mark.anyio
@@ -311,10 +312,38 @@ async def test_generate_instrument_analysis_news_bounded_to_five_items() -> None
     news = FakeNewsUseCase(result=_news(count=10))
     use_case, gateway = _use_case(details, history, news)
 
-    await use_case.execute("AAPL")
+    await use_case.execute("AAPL", AnalysisHorizon.SHORT)
 
     assert gateway.received_input is not None
     assert len(gateway.received_input.news) == 5
+
+
+@pytest.mark.anyio
+async def test_generate_instrument_analysis_medium_horizon_fetches_three_month_history() -> None:
+    details = FakeDetailsUseCase(result=_snapshot())
+    history = FakeHistoryUseCase(result=_history())
+    news = FakeNewsUseCase(result=_news())
+    use_case, gateway = _use_case(details, history, news)
+
+    await use_case.execute("AAPL", AnalysisHorizon.MEDIUM)
+
+    assert history.received_args == ("AAPL", "3M")
+    assert gateway.received_input is not None
+    assert gateway.received_input.horizon == AnalysisHorizon.MEDIUM
+
+
+@pytest.mark.anyio
+async def test_generate_instrument_analysis_long_horizon_fetches_one_year_history() -> None:
+    details = FakeDetailsUseCase(result=_snapshot())
+    history = FakeHistoryUseCase(result=_history())
+    news = FakeNewsUseCase(result=_news())
+    use_case, gateway = _use_case(details, history, news)
+
+    await use_case.execute("AAPL", AnalysisHorizon.LONG)
+
+    assert history.received_args == ("AAPL", "1Y")
+    assert gateway.received_input is not None
+    assert gateway.received_input.horizon == AnalysisHorizon.LONG
 
 
 @pytest.mark.anyio
@@ -341,7 +370,7 @@ async def test_generate_instrument_analysis_news_headline_and_summary_truncated(
     news = FakeNewsUseCase(result=news_with_long_text)
     use_case, gateway = _use_case(details, history, news)
 
-    await use_case.execute("AAPL")
+    await use_case.execute("AAPL", AnalysisHorizon.SHORT)
 
     assert gateway.received_input is not None
     fact = gateway.received_input.news[0]

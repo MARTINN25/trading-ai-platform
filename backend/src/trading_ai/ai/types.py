@@ -37,7 +37,82 @@ DISCLAIMER_TEXT = (
 # changing shape, and independent of the Alembic migration id, which
 # tracks the *storage* schema, not this AI output contract (task scope
 # §18: these are deliberately different version axes).
-INSIGHT_SCHEMA_VERSION = "insight-structure-v1"
+#
+# Phase 2B (Forecast Contract, FR-061/FR-062): bumped from
+# "insight-structure-v1" to "insight-structure-v2-forecast" — same
+# precedent as the v1 bump during Insight Persistence & Structure
+# Completion. `InstrumentAnalysis` is *extended*, not replaced
+# (`docs/architecture/FORECAST_CONTRACT.md` §11: "расширение, а не
+# замена") — every FR-018 field a v1 row already has stays exactly
+# where it was; the new forecast fields below are additive and
+# optional (`None`/`()` default) so a v1-shaped `InstrumentAnalysis`
+# instance is still structurally valid. Rows persisted with
+# `schema_version == "insight-structure-v1"` keep that exact stored
+# string forever (`insights` is append-only, `ADR-0004` §20) — this
+# constant only controls what *new* generations record.
+INSIGHT_SCHEMA_VERSION = "insight-structure-v2-forecast"
+
+
+class AnalysisHorizon(str, Enum):
+    """FR-006 — the three Product-Owner-approved ranges (Phase 2.0,
+    PO-2.0-3): SHORT 1-5 trading days, MEDIUM ~1-8 weeks, LONG ~2-12
+    months (exact wording lives in `FUNCTIONAL_REQUIREMENTS.md`, not
+    repeated here as a number to avoid two sources of truth for the
+    same range). Selected by the user *before* requesting analysis
+    (`UJ-005`) — `ai/use_cases.py`/the API layer never silently default
+    this (task scope §4).
+
+    SHORT is explicitly not scalping (FR-027 stays a separate,
+    self-documented fast mode) — this enum has no fourth "scalp" value.
+    """
+
+    SHORT = "short"
+    MEDIUM = "medium"
+    LONG = "long"
+
+
+class DirectionalView(str, Enum):
+    """PO-2.0-4 — a fixed categorical directional scale. Deliberately
+    not BUY/SELL/HOLD: this is a description of a view, never an
+    execution command (`PRODUCT_SCOPE.md` §15, `FORECAST_CONTRACT.md` §9)."""
+
+    STRONGLY_BULLISH = "strongly_bullish"
+    BULLISH = "bullish"
+    NEUTRAL = "neutral"
+    BEARISH = "bearish"
+    STRONGLY_BEARISH = "strongly_bearish"
+
+
+class ForecastState(str, Enum):
+    """`FORECAST_CONTRACT.md` §5, PO-2.0-8 — `NO_QUALITY_SETUP`/
+    `INSUFFICIENT_EDGE`/`INSUFFICIENT_DATA` are valid, desired outcomes
+    the assistant must be free to return, never a fallback the pipeline
+    only reaches on failure. The assistant must not manufacture a
+    bullish/bearish view merely because the user asked for one
+    (PO-2.0-8, verbatim)."""
+
+    FORECAST = "forecast"
+    NO_QUALITY_SETUP = "no_quality_setup"
+    INSUFFICIENT_EDGE = "insufficient_edge"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
+class HorizonDataSufficiency(str, Enum):
+    """Deterministic gate result computed by `ai/horizon.py` — never by
+    the LLM (task scope §12: "не позволять LLM самостоятельно решать
+    достаточность данных там, где это может сделать детерминированный
+    код"). `SUFFICIENT` does not by itself force `ForecastState.FORECAST`
+    — the model may still return `NO_QUALITY_SETUP`/`INSUFFICIENT_EDGE`
+    for qualitative reasons this gate cannot see (contradictory
+    signals, no structural basis). `INSUFFICIENT` works the other
+    direction unconditionally: `ai/gateway.py` overrides any
+    model-claimed `FORECAST` state back to `INSUFFICIENT_DATA`
+    regardless of what the model returned — the deterministic gate is
+    the final authority on that one direction, not a suggestion to the
+    model."""
+
+    SUFFICIENT = "sufficient"
+    INSUFFICIENT = "insufficient"
 
 
 class ConfidenceLevel(str, Enum):
@@ -132,13 +207,27 @@ class NewsHeadlineFact:
 
 @dataclass(frozen=True, slots=True)
 class InstrumentAnalysisInput:
-    """The only thing `ai/gateway.py` ever sees for one analysis call."""
+    """The only thing `ai/gateway.py` ever sees for one analysis call.
+
+    Phase 2B: `horizon` is now a required part of every analysis input
+    (FR-006 — "горизонт передаётся в аналитический запрос и материально
+    влияет на структуру и интерпретацию инсайта"), not an optional
+    add-on. `horizon_sufficiency`/`horizon_sufficiency_reason` are
+    computed deterministically by `ai/horizon.py` *before* this input
+    is built — the model is told the result as DATA, and
+    `ai/gateway.py` enforces it after the fact too (task scope §12) —
+    the model is never the sole authority on whether it has enough to
+    work with for the requested horizon.
+    """
 
     ticker: str
     price: PriceContextFact
     history: HistorySummaryFact
     news: tuple[NewsHeadlineFact, ...]
     news_available: bool
+    horizon: AnalysisHorizon
+    horizon_sufficiency: HorizonDataSufficiency
+    horizon_sufficiency_reason: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +257,25 @@ class InstrumentAnalysis:
     `InstrumentAnalysisInput` — never asked of the model, which is
     already told this exact timestamp as DATA and has no reason to be
     trusted to restate it correctly.
+
+    Phase 2B (Forecast Contract, FR-061/FR-062) — additive fields below
+    `schema_version`, all `None`/`()` for any `insight-structure-v1` row
+    read back from before this task, and always populated for a new
+    generation (`ai/use_cases.py`/`ai/gateway.py`). `docs/architecture/
+    FORECAST_CONTRACT.md` §3's field table maps the *old* 10 sections
+    onto these concepts conceptually (e.g. "Ключевые факты" -> evidence,
+    "Основные риски" -> `risks`, already existing above) — this
+    dataclass does not duplicate those two into a second pair of
+    fields; `evidence` in the Forecast Contract API surface is `key_facts`
+    presented under that name (see `api/routes/instruments.py`).
+
+    `forecast_state` is the first-class outcome of the deterministic
+    sufficiency gate plus the model's own qualitative judgment
+    (`ForecastState`) — when it is anything other than `FORECAST`,
+    `directional_view`/`base_case`/`bullish_case`/`bearish_case` are
+    `None` and `catalysts`/`invalidation_conditions` are empty: a
+    no-quality-setup result never carries directional content (task
+    scope §12, `FORECAST_CONTRACT.md` §5, §9).
     """
 
     ticker: str
@@ -189,6 +297,19 @@ class InstrumentAnalysis:
     model: str
     prompt_version: str
     schema_version: str
+    horizon: AnalysisHorizon | None = None
+    forecast_state: ForecastState | None = None
+    directional_view: DirectionalView | None = None
+    concise_verdict: str | None = None
+    base_case: str | None = None
+    bullish_case: str | None = None
+    bearish_case: str | None = None
+    catalysts: tuple[str, ...] = ()
+    invalidation_conditions: tuple[str, ...] = ()
+    what_to_watch_next: tuple[str, ...] = ()
+    check_after: datetime | None = None
+    uncertainty: str | None = None
+    context_categories_used: tuple[str, ...] = ()
 
 
 class NewsRelevance(str, Enum):

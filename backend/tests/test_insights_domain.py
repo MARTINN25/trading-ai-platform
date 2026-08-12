@@ -123,3 +123,90 @@ def test_pending_analysis_not_found_error_carries_ticker() -> None:
 def test_insight_not_found_error_carries_id() -> None:
     error = InsightNotFoundError(42)
     assert error.insight_id == 42
+
+
+# Phase 2B (Forecast Contract) — old-schema compatibility (task scope §22:
+# "old schema compatibility; new schema validation").
+
+
+def test_saved_insight_without_forecast_fields_is_still_valid() -> None:
+    """A row saved before Phase 2B (`schema_version ==
+    "insight-structure-v1"`) is constructible with none of the new
+    fields supplied — proving the FR-018 shape alone remains valid,
+    exactly as it did before this task."""
+    saved = SavedInsight(
+        id=1,
+        ticker="ACME",
+        generated_at=_T,
+        created_at=_T,
+        summary="s",
+        price_context="p",
+        news_context="n",
+        key_facts=(KeyFact(fact="f", source="Текущая котировка"),),
+        insight_hypothesis="h",
+        confidence=ConfidenceLevel.HIGH,
+        confidence_reason="cr",
+        considerations=("c",),
+        risks=("r",),
+        key_drivers=("kd",),
+        data_freshness="df",
+        source_data_as_of=_T,
+        disclaimer="d",
+        provider="xai",
+        model="grok-4.5",
+        prompt_version="instrument-analysis-v2",
+        schema_version="insight-structure-v1",
+    )
+    assert saved.horizon is None
+    assert saved.forecast_state is None
+    assert saved.directional_view is None
+    assert saved.concise_verdict is None
+    assert saved.catalysts == ()
+    assert saved.invalidation_conditions == ()
+    assert saved.check_after is None
+
+
+def test_saved_insight_with_forecast_fields_round_trips() -> None:
+    from trading_ai.ai.types import AnalysisHorizon, DirectionalView, ForecastState
+
+    saved = SavedInsight(
+        id=2,
+        ticker="ACME",
+        generated_at=_T,
+        created_at=_T,
+        summary="s",
+        price_context="p",
+        news_context="n",
+        key_facts=(KeyFact(fact="f", source="Текущая котировка"),),
+        insight_hypothesis="h",
+        confidence=ConfidenceLevel.HIGH,
+        confidence_reason="cr",
+        considerations=("c",),
+        risks=("r",),
+        key_drivers=("kd",),
+        data_freshness="df",
+        source_data_as_of=_T,
+        disclaimer="d",
+        provider="xai",
+        model="grok-4.5",
+        prompt_version="instrument-analysis-v3-forecast",
+        schema_version="insight-structure-v2-forecast",
+        horizon=AnalysisHorizon.SHORT,
+        forecast_state=ForecastState.FORECAST,
+        directional_view=DirectionalView.BULLISH,
+        concise_verdict="verdict",
+        base_case="base",
+        bullish_case="bull",
+        bearish_case="bear",
+        catalysts=("c1",),
+        invalidation_conditions=("i1",),
+        what_to_watch_next=("w1",),
+        check_after=_T,
+        uncertainty="u",
+        context_categories_used=("identity", "price"),
+    )
+    assert saved.horizon == AnalysisHorizon.SHORT
+    assert saved.forecast_state == ForecastState.FORECAST
+    assert saved.directional_view == DirectionalView.BULLISH
+    assert saved.catalysts == ("c1",)
+    assert saved.check_after == _T

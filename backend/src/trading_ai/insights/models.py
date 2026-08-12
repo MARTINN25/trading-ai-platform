@@ -34,6 +34,9 @@ _PROVIDER_MAX_LENGTH = 50
 _MODEL_MAX_LENGTH = 100
 _VERSION_MAX_LENGTH = 50
 _CONFIDENCE_MAX_LENGTH = 10
+_HORIZON_MAX_LENGTH = 10
+_FORECAST_STATE_MAX_LENGTH = 20
+_DIRECTIONAL_VIEW_MAX_LENGTH = 20
 
 
 class InsightModel(Base):
@@ -67,3 +70,21 @@ class InsightModel(Base):
     model: Mapped[str] = mapped_column(String(_MODEL_MAX_LENGTH), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(_VERSION_MAX_LENGTH), nullable=False)
     schema_version: Mapped[str] = mapped_column(String(_VERSION_MAX_LENGTH), nullable=False)
+
+    # Phase 2B (Forecast Contract, migration 0007) — additive, all
+    # nullable: a row saved before this migration has every column
+    # below `NULL` and remains fully readable/valid (task scope §8,
+    # §16 — old insights are never rewritten, ADR-0004 §20).
+    horizon: Mapped[str | None] = mapped_column(String(_HORIZON_MAX_LENGTH))
+    forecast_state: Mapped[str | None] = mapped_column(String(_FORECAST_STATE_MAX_LENGTH))
+    directional_view: Mapped[str | None] = mapped_column(String(_DIRECTIONAL_VIEW_MAX_LENGTH))
+    concise_verdict: Mapped[str | None] = mapped_column(Text)
+    base_case: Mapped[str | None] = mapped_column(Text)
+    bullish_case: Mapped[str | None] = mapped_column(Text)
+    bearish_case: Mapped[str | None] = mapped_column(Text)
+    catalysts: Mapped[list[str] | None] = mapped_column(JSONB)
+    invalidation_conditions: Mapped[list[str] | None] = mapped_column(JSONB)
+    what_to_watch_next: Mapped[list[str] | None] = mapped_column(JSONB)
+    check_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    uncertainty: Mapped[str | None] = mapped_column(Text)
+    context_categories_used: Mapped[list[str] | None] = mapped_column(JSONB)

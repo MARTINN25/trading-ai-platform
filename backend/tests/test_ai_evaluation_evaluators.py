@@ -14,8 +14,12 @@ from trading_ai.ai.evaluation.evaluators import run_checks
 from trading_ai.ai.evaluation.types import CheckResult, EvaluationCase, EvaluationExpectation
 from trading_ai.ai.types import (
     DISCLAIMER_TEXT,
+    AnalysisHorizon,
     ConfidenceLevel,
+    DirectionalView,
+    ForecastState,
     HistorySummaryFact,
+    HorizonDataSufficiency,
     InstrumentAnalysis,
     InstrumentAnalysisInput,
     KeyFact,
@@ -67,6 +71,9 @@ def _case(
         history=_history(available=history_available),
         news=(),
         news_available=news_available,
+        horizon=AnalysisHorizon.SHORT,
+        horizon_sufficiency=HorizonDataSufficiency.SUFFICIENT,
+        horizon_sufficiency_reason="",
     )
     # `reference_response` is unused by these tests (they call
     # `run_checks` directly against a hand-built response), but the
@@ -101,8 +108,21 @@ def _response(**overrides: object) -> InstrumentAnalysis:
         "disclaimer": DISCLAIMER_TEXT,
         "provider": "xai",
         "model": "grok-4.5",
-        "prompt_version": "instrument-analysis-v2",
-        "schema_version": "insight-structure-v1",
+        "prompt_version": "instrument-analysis-v3-forecast",
+        "schema_version": "insight-structure-v2-forecast",
+        "horizon": AnalysisHorizon.SHORT,
+        "forecast_state": ForecastState.FORECAST,
+        "directional_view": DirectionalView.BULLISH,
+        "concise_verdict": "Умеренно бычий взгляд на короткий срок.",
+        "base_case": "Цена сохраняет умеренный уклон вверх.",
+        "bullish_case": "Продолжение роста при подтверждении объёмом.",
+        "bearish_case": "Откат к уровням до роста, если импульс не подтвердится объёмом.",
+        "catalysts": ("Дальнейшие новости по инструменту.",),
+        "invalidation_conditions": ("Пробитие недавнего минимума истории цены вниз.",),
+        "what_to_watch_next": ("Динамика цены в ближайшие торговые дни.",),
+        "check_after": _T,
+        "uncertainty": "Однодневное движение — ограниченная выборка.",
+        "context_categories_used": ("identity", "price", "history", "news"),
     }
     fields.update(overrides)
     return InstrumentAnalysis(**fields)  # type: ignore[arg-type]
@@ -196,6 +216,18 @@ def test_non_russian_output_fails() -> None:
             price_context="Price is 145.20, up 3.10 (2.18%).",
             news_context="News is neutral overall for this company.",
             risks=("Past performance does not guarantee future results.",),
+            insight_hypothesis="The rise looks consistent with neutral news.",
+            confidence_reason="Quote and history are available and consistent.",
+            considerations=("Compare with sector peers.",),
+            key_drivers=("A 2.18% daily rise.",),
+            concise_verdict="Mildly bullish view for the short term.",
+            base_case="Price holds a mild upward tilt.",
+            bullish_case="Continued rise if momentum is confirmed by volume.",
+            bearish_case="Pullback if momentum is not confirmed.",
+            catalysts=("Further company news.",),
+            invalidation_conditions=("A break below the recent price-history low.",),
+            what_to_watch_next=("Price action over the next trading days.",),
+            uncertainty="A single-day move is a limited sample.",
         ),
         _case(),
     )
@@ -262,3 +294,99 @@ def test_forbidden_language_in_key_fact_text_fails() -> None:
 def test_forbidden_language_in_considerations_fails() -> None:
     checks = run_checks(_response(considerations=("Целевая цена в районе $300.",)), _case())
     assert _names(checks)["no_target_price"] is False
+
+
+# Phase 2B (Forecast Contract) checks — task scope §22: "forbidden numeric
+# probability; forbidden BUY/SELL/HOLD; forbidden unsupported target
+# price; no-edge state; ..."
+
+
+def test_numeric_probability_in_english_fails() -> None:
+    checks = run_checks(_response(uncertainty="There is a 70% chance of a rally."), _case())
+    assert _names(checks)["no_numeric_probability"] is False
+
+
+def test_numeric_probability_in_russian_fails() -> None:
+    checks = run_checks(_response(bullish_case="Вероятность роста составляет 70%."), _case())
+    assert _names(checks)["no_numeric_probability"] is False
+
+
+def test_forecast_state_matches_expectation_fails_on_mismatch() -> None:
+    case = _case(expectation=EvaluationExpectation(expected_forecast_state=ForecastState.NO_QUALITY_SETUP))
+    checks = run_checks(_response(forecast_state=ForecastState.FORECAST), case)
+    assert _names(checks)["forecast_state_matches_expectation"] is False
+
+
+def test_forecast_state_matches_expectation_passes_on_match() -> None:
+    case = _case(expectation=EvaluationExpectation(expected_forecast_state=ForecastState.FORECAST))
+    checks = run_checks(_response(forecast_state=ForecastState.FORECAST), case)
+    assert _names(checks)["forecast_state_matches_expectation"] is True
+
+
+def test_directional_view_null_with_forecast_state_fails() -> None:
+    """A `FORECAST`-state result must always carry a `directional_view`
+    — this is the deterministic-structure check, not the model-honesty
+    prompt rule (that's enforced separately in `ai/gateway.py`)."""
+    checks = run_checks(
+        _response(forecast_state=ForecastState.FORECAST, directional_view=None), _case()
+    )
+    assert _names(checks)["directional_content_matches_state"] is False
+
+
+def test_directional_view_present_with_no_quality_setup_fails() -> None:
+    """A non-FORECAST state must never carry directional content."""
+    checks = run_checks(
+        _response(forecast_state=ForecastState.NO_QUALITY_SETUP, directional_view=DirectionalView.BULLISH),
+        _case(),
+    )
+    assert _names(checks)["directional_content_matches_state"] is False
+
+
+def test_no_quality_setup_without_directional_content_passes() -> None:
+    checks = run_checks(
+        _response(
+            forecast_state=ForecastState.NO_QUALITY_SETUP,
+            directional_view=None,
+            base_case=None,
+            bullish_case=None,
+            bearish_case=None,
+            catalysts=(),
+            invalidation_conditions=(),
+        ),
+        _case(),
+    )
+    assert _names(checks)["directional_content_matches_state"] is True
+
+
+def test_empty_concise_verdict_fails() -> None:
+    checks = run_checks(_response(concise_verdict=""), _case())
+    assert _names(checks)["concise_verdict_present"] is False
+
+
+def test_empty_uncertainty_fails() -> None:
+    checks = run_checks(_response(uncertainty=""), _case())
+    assert _names(checks)["uncertainty_present"] is False
+
+
+def test_vague_invalidation_condition_fails() -> None:
+    checks = run_checks(_response(invalidation_conditions=("if things get worse",)), _case())
+    assert _names(checks)["invalidation_conditions_specific"] is False
+
+
+def test_empty_invalidation_conditions_fails_when_forecast() -> None:
+    checks = run_checks(
+        _response(forecast_state=ForecastState.FORECAST, invalidation_conditions=()), _case()
+    )
+    assert _names(checks)["invalidation_conditions_specific"] is False
+
+
+def test_missing_what_to_watch_next_fails_when_forecast() -> None:
+    checks = run_checks(_response(what_to_watch_next=()), _case())
+    assert _names(checks)["what_to_watch_next_present"] is False
+
+
+def test_missing_horizon_or_check_after_fails() -> None:
+    checks = run_checks(_response(horizon=None), _case())
+    assert _names(checks)["horizon_and_check_after_present"] is False
+    checks = run_checks(_response(check_after=None), _case())
+    assert _names(checks)["horizon_and_check_after_present"] is False
