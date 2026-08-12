@@ -115,11 +115,24 @@ class InstrumentSearchResponse(BaseModel):
 
 
 class InstrumentHistoryPointResponse(BaseModel):
-    """Only what the line chart needs — OHLC/volume stay internal to
-    `PricePoint` (task scope §5: don't carry fields the UI doesn't use)."""
+    """Phase 2B.1 (Professional Instrument Workspace, task scope §6):
+    `open`/`high`/`low`/`volume` are additive, nullable fields exposing
+    what `PricePoint`/`TwelveDataGateway._parse_history` already parses
+    from the real provider response — confirmed live (this task's chart
+    audit) as genuinely present per-bar for every point on the current
+    plan, not fabricated. `None` only when the provider's own response
+    didn't include/couldn't parse that specific field for that specific
+    bar (same honest-nullability rule as `InstrumentDetailsResponse`),
+    never a guessed value. `close` remains required — a bar without a
+    usable close was already dropped upstream before this response is
+    built."""
 
     timestamp: datetime
+    open: Decimal | None = None
+    high: Decimal | None = None
+    low: Decimal | None = None
     close: Decimal
+    volume: int | None = None
 
 
 class InstrumentHistoryResponse(BaseModel):
@@ -668,7 +681,14 @@ async def get_instrument_price_history(
         period=history.period.value,
         source=history.source,
         points=[
-            InstrumentHistoryPointResponse(timestamp=point.timestamp, close=point.close)
+            InstrumentHistoryPointResponse(
+                timestamp=point.timestamp,
+                open=point.open,
+                high=point.high,
+                low=point.low,
+                close=point.close,
+                volume=point.volume,
+            )
             for point in history.points
         ],
     )

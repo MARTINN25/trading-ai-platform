@@ -9,10 +9,16 @@ import type { AnalysisHorizon } from "@/lib/instrument-api";
  * scalping mode — the hint text states the real 1-5 trading day range,
  * not an intraday/tick framing (task scope §4).
  */
+export const HORIZON_HINTS: Record<AnalysisHorizon, string> = {
+  short: "1–5 торговых дней",
+  medium: "1–8 недель",
+  long: "2–12 месяцев",
+};
+
 const HORIZON_OPTIONS: { value: AnalysisHorizon; label: string; hint: string }[] = [
-  { value: "short", label: "SHORT", hint: "1–5 торговых дней" },
-  { value: "medium", label: "MEDIUM", hint: "1–8 недель" },
-  { value: "long", label: "LONG", hint: "2–12 месяцев" },
+  { value: "short", label: "SHORT", hint: HORIZON_HINTS.short },
+  { value: "medium", label: "MEDIUM", hint: HORIZON_HINTS.medium },
+  { value: "long", label: "LONG", hint: HORIZON_HINTS.long },
 ];
 
 export default function HorizonSelector({

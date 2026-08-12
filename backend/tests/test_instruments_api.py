@@ -283,8 +283,47 @@ def test_get_instrument_price_history_success_returns_ordered_points() -> None:
     assert body["source"] == "twelvedata"
     assert len(body["points"]) == 2
     assert Decimal(body["points"][0]["close"]) == Decimal("306.62")
-    assert "open" not in body["points"][0]
+    # Phase 2B.1 (task scope §6): OHLC/volume are additive fields, not
+    # discarded — `PricePoint`'s full shape now reaches the response.
+    assert Decimal(body["points"][0]["open"]) == Decimal("306.65")
+    assert Decimal(body["points"][0]["high"]) == Decimal("306.73")
+    assert Decimal(body["points"][0]["low"]) == Decimal("306.56")
+    assert body["points"][0]["volume"] == 31152
     assert fake_use_case.received_args == ("AAPL", "1D")
+
+
+def test_get_instrument_price_history_missing_ohlc_volume_are_null_not_fabricated() -> None:
+    """A bar the provider returned without OHLC/volume (only a usable
+    close) must round-trip as `null`, never a guessed value (task scope
+    §6-§7: honest nullability, same rule as `InstrumentDetailsResponse`)."""
+    app = create_app()
+    sparse_history = PriceHistory(
+        ticker="AAPL",
+        period=InstrumentHistoryPeriod.ONE_DAY,
+        source="twelvedata",
+        points=(
+            PricePoint(
+                timestamp=datetime(2026, 8, 10, 15, 20, 0, tzinfo=timezone.utc),
+                open=None,
+                high=None,
+                low=None,
+                close=Decimal("306.62"),
+                volume=None,
+            ),
+        ),
+    )
+    _override_history(app, _FakeGetInstrumentPriceHistory(result=sparse_history))
+    client = TestClient(app)
+
+    response = client.get("/instruments/AAPL/history?period=1D")
+
+    assert response.status_code == 200
+    point = response.json()["points"][0]
+    assert point["open"] is None
+    assert point["high"] is None
+    assert point["low"] is None
+    assert point["volume"] is None
+    assert Decimal(point["close"]) == Decimal("306.62")
 
 
 def test_get_instrument_price_history_5d_and_1m_periods_pass_through() -> None:

@@ -64,9 +64,23 @@ const RELATIONSHIP_LABELS: Record<NewsRelationship, string> = {
   noise: "Шум",
 };
 
-function NewsCard({ item }: { item: InstrumentNewsItem }) {
+type NewsTier = "top" | "context";
+
+/**
+ * Two visual tiers using only real, already-returned data — never an
+ * invented ranking (task scope §12-§13). `tier="top"` gets the full
+ * card (RU summary, why-it-matters, hypothesis, original headline, all
+ * visible). `tier="context"` shows a clamped summary plus a collapsible
+ * "Подробнее" for the same fields — nothing is hidden with no way to
+ * reveal it, just deprioritized by default.
+ */
+function NewsCard({ item, tier }: { item: InstrumentNewsItem; tier: NewsTier }) {
+  const isCompact = tier === "context";
+  const hasExpandableDetail =
+    isCompact && item.enriched && Boolean(item.why_it_matters || item.impact_hypothesis);
+
   return (
-    <li className="instrument-news-card">
+    <li className={`instrument-news-card instrument-news-card--${tier}`}>
       <div className="instrument-news-badges">
         {item.enriched ? (
           <>
@@ -90,23 +104,54 @@ function NewsCard({ item }: { item: InstrumentNewsItem }) {
 
       {item.enriched && item.summary_ru ? (
         <>
-          <p className="instrument-news-summary-ru">{item.summary_ru}</p>
-          {item.why_it_matters ? (
+          <p
+            className={
+              isCompact ? "instrument-news-summary-ru instrument-news-summary-ru--clamped" : "instrument-news-summary-ru"
+            }
+          >
+            {item.summary_ru}
+          </p>
+          {!isCompact && item.why_it_matters ? (
             <p className="instrument-news-field">
               <span className="instrument-news-field-label">Почему важно: </span>
               {item.why_it_matters}
             </p>
           ) : null}
-          {item.impact_hypothesis ? (
-            <p className="instrument-news-field">
+          {!isCompact && item.impact_hypothesis ? (
+            <p className="instrument-news-field instrument-news-field--hypothesis">
               <span className="instrument-news-field-label">Возможное влияние (гипотеза): </span>
               {item.impact_hypothesis}
             </p>
           ) : null}
-          <div className="instrument-news-original">
-            <p className="instrument-news-original-label">Оригинал</p>
-            <h3 className="instrument-news-headline">{item.headline}</h3>
-          </div>
+          {!isCompact && (
+            <div className="instrument-news-original">
+              <p className="instrument-news-original-label">Оригинал</p>
+              <h3 className="instrument-news-headline">{item.headline}</h3>
+            </div>
+          )}
+          {hasExpandableDetail && (
+            <details className="instrument-news-more">
+              <summary>Подробнее</summary>
+              <div className="instrument-news-more-body">
+                {item.why_it_matters ? (
+                  <p className="instrument-news-field">
+                    <span className="instrument-news-field-label">Почему важно: </span>
+                    {item.why_it_matters}
+                  </p>
+                ) : null}
+                {item.impact_hypothesis ? (
+                  <p className="instrument-news-field instrument-news-field--hypothesis">
+                    <span className="instrument-news-field-label">Возможное влияние (гипотеза): </span>
+                    {item.impact_hypothesis}
+                  </p>
+                ) : null}
+                <div className="instrument-news-original">
+                  <p className="instrument-news-original-label">Оригинал</p>
+                  <h3 className="instrument-news-headline">{item.headline}</h3>
+                </div>
+              </div>
+            </details>
+          )}
         </>
       ) : (
         <h3 className="instrument-news-headline">{item.headline}</h3>
@@ -150,6 +195,21 @@ export default function InstrumentNewsSection({ ticker }: { ticker: string }) {
   const anyEnriched = safeItems.some((item) => item.enriched);
   const allDegraded = safeItems.length > 0 && !anyEnriched;
 
+  // Tiering uses only the backend's own `relevance` flag and preserves
+  // its existing relative order in both groups — never a client-side
+  // re-ranking (task scope §12). Capped at 2 "top" items so the
+  // highlighted tier stays a highlight, not most of the list.
+  const MAX_TOP_ITEMS = 2;
+  const topItems: InstrumentNewsItem[] = [];
+  const contextItems: InstrumentNewsItem[] = [];
+  for (const item of safeItems) {
+    if (item.relevance === "high" && topItems.length < MAX_TOP_ITEMS) {
+      topItems.push(item);
+    } else {
+      contextItems.push(item);
+    }
+  }
+
   return (
     <section className="instrument-news-section" aria-labelledby="instrument-news-heading">
       <h2 id="instrument-news-heading">Новости</h2>
@@ -176,12 +236,26 @@ export default function InstrumentNewsSection({ ticker }: { ticker: string }) {
           </p>
         )}
 
-        {state.status === "loaded" && safeItems.length > 0 && (
-          <ul className="instrument-news-list">
-            {safeItems.map((item) => (
-              <NewsCard key={item.id} item={item} />
-            ))}
-          </ul>
+        {state.status === "loaded" && topItems.length > 0 && (
+          <>
+            <h3 className="instrument-news-tier-title">Топ-новости</h3>
+            <ul className="instrument-news-list instrument-news-list--top">
+              {topItems.map((item) => (
+                <NewsCard key={item.id} item={item} tier="top" />
+              ))}
+            </ul>
+          </>
+        )}
+
+        {state.status === "loaded" && contextItems.length > 0 && (
+          <>
+            {topItems.length > 0 && <h3 className="instrument-news-tier-title">Дополнительный контекст</h3>}
+            <ul className="instrument-news-list instrument-news-list--context">
+              {contextItems.map((item) => (
+                <NewsCard key={item.id} item={item} tier="context" />
+              ))}
+            </ul>
+          </>
         )}
       </div>
     </section>

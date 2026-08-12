@@ -7,7 +7,7 @@ import {
   type InstrumentHistoryPeriod,
   type InstrumentPriceHistory,
 } from "@/lib/instrument-api";
-import PriceChart from "@/components/PriceChart";
+import PriceChart, { formatPointTimestamp } from "@/components/PriceChart";
 
 type PeriodState =
   | { status: "idle" }
@@ -24,18 +24,12 @@ const PERIOD_LABELS: Record<InstrumentHistoryPeriod, string> = {
 // Task scope §9: "default period — один разумный период, например 1D".
 const DEFAULT_PERIOD: InstrumentHistoryPeriod = "1D";
 
-const timeOnlyFormatter = new Intl.DateTimeFormat("ru-RU", { timeStyle: "short" });
-const dateTimeFormatter = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" });
-const dateOnlyFormatter = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium" });
-
 function formatTimestamp(value: string, period: InstrumentHistoryPeriod): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
+  const t = new Date(value).getTime();
+  if (Number.isNaN(t)) {
     return value;
   }
-  if (period === "1D") return timeOnlyFormatter.format(date);
-  if (period === "1M") return dateOnlyFormatter.format(date);
-  return dateTimeFormatter.format(date);
+  return formatPointTimestamp(t, period);
 }
 
 function formatClose(value: string): string | null {
@@ -50,7 +44,25 @@ function initialStates(): Record<InstrumentHistoryPeriod, PeriodState> {
   return { "1D": { status: "idle" }, "5D": { status: "idle" }, "1M": { status: "idle" } };
 }
 
-export default function PriceChartSection({ ticker }: { ticker: string }) {
+/** Reported to the parent so the market-snapshot panel can derive
+ * period high/low/position without a second, duplicate history fetch
+ * (task scope §9) — same narrow, one-directional bridge pattern
+ * already used between `AiAnalysisSection`/`InsightHistorySection`
+ * (`onInsightSaved`). `PriceChartSection` still owns its entire own
+ * fetch/loading/error state; this is a read-only report of what it
+ * already loaded, not shared state. */
+export interface ActivePeriodHistory {
+  period: InstrumentHistoryPeriod;
+  data: InstrumentPriceHistory;
+}
+
+export default function PriceChartSection({
+  ticker,
+  onActivePeriodHistoryChange,
+}: {
+  ticker: string;
+  onActivePeriodHistoryChange?: (history: ActivePeriodHistory | null) => void;
+}) {
   const [activePeriod, setActivePeriod] = useState<InstrumentHistoryPeriod>(DEFAULT_PERIOD);
   const [statesByPeriod, setStatesByPeriod] =
     useState<Record<InstrumentHistoryPeriod, PeriodState>>(initialStates);
@@ -92,6 +104,15 @@ export default function PriceChartSection({ ticker }: { ticker: string }) {
 
   const currentState = statesByPeriod[activePeriod];
 
+  useEffect(() => {
+    if (!onActivePeriodHistoryChange) return;
+    if (currentState.status === "loaded") {
+      onActivePeriodHistoryChange({ period: activePeriod, data: currentState.data });
+    } else {
+      onActivePeriodHistoryChange(null);
+    }
+  }, [activePeriod, currentState, onActivePeriodHistoryChange]);
+
   return (
     <section className="price-chart-section" aria-labelledby="price-chart-heading">
       <h2 id="price-chart-heading">График цены</h2>
@@ -131,7 +152,7 @@ export default function PriceChartSection({ ticker }: { ticker: string }) {
         {currentState.status === "loaded" && currentState.data.points.length > 0 && (
           <>
             <div className="price-chart-container">
-              <PriceChart points={currentState.data.points} />
+              <PriceChart points={currentState.data.points} period={activePeriod} />
             </div>
             <p className="price-chart-summary">
               Последняя цена:{" "}
