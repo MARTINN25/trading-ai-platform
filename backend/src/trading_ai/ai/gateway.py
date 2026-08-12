@@ -29,8 +29,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from trading_ai.ai.horizon import compute_check_after
 from trading_ai.ai.news_prompts import NEWS_SYSTEM_INSTRUCTIONS, build_news_user_content
 from trading_ai.ai.prompts import PROMPT_VERSION, SYSTEM_INSTRUCTIONS, build_user_content
 from trading_ai.ai.types import (
@@ -47,6 +48,9 @@ from trading_ai.ai.types import (
     AIRateLimitedError,
     AITimeoutError,
     ConfidenceLevel,
+    DirectionalView,
+    ForecastState,
+    HorizonDataSufficiency,
     InstrumentAnalysis,
     InstrumentAnalysisInput,
     KeyFact,
@@ -90,6 +94,15 @@ _KEY_FACT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+_DIRECTIONAL_VIEW_ENUM = [
+    "strongly_bullish",
+    "bullish",
+    "neutral",
+    "bearish",
+    "strongly_bearish",
+]
+_FORECAST_STATE_ENUM = ["forecast", "no_quality_setup", "insufficient_edge", "insufficient_data"]
+
 _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
     "name": "instrument_analysis",
     "schema": {
@@ -105,6 +118,18 @@ _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
             "considerations": {"type": "array", "items": {"type": "string"}},
             "risks": {"type": "array", "items": {"type": "string"}},
             "key_drivers": {"type": "array", "items": {"type": "string"}},
+            # Phase 2B (Forecast Contract) — see `ai/prompts.py` rules
+            # 13-22 and `ai/types.py`'s `InstrumentAnalysis` docstring.
+            "forecast_state": {"type": "string", "enum": _FORECAST_STATE_ENUM},
+            "directional_view": {"type": ["string", "null"], "enum": [*_DIRECTIONAL_VIEW_ENUM, None]},
+            "concise_verdict": {"type": "string"},
+            "base_case": {"type": ["string", "null"]},
+            "bullish_case": {"type": ["string", "null"]},
+            "bearish_case": {"type": ["string", "null"]},
+            "catalysts": {"type": "array", "items": {"type": "string"}},
+            "invalidation_conditions": {"type": "array", "items": {"type": "string"}},
+            "what_to_watch_next": {"type": "array", "items": {"type": "string"}},
+            "uncertainty": {"type": "string"},
         },
         "required": [
             "summary",
@@ -117,6 +142,16 @@ _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
             "considerations",
             "risks",
             "key_drivers",
+            "forecast_state",
+            "directional_view",
+            "concise_verdict",
+            "base_case",
+            "bullish_case",
+            "bearish_case",
+            "catalysts",
+            "invalidation_conditions",
+            "what_to_watch_next",
+            "uncertainty",
         ],
         "additionalProperties": False,
     },
@@ -183,6 +218,8 @@ _FORBIDDEN_PHRASES = (
     "buy rating",
     "sell rating",
     "hold rating",
+    "buy now",
+    "sell now",
     "target price",
     "price target",
     "покупай",
@@ -202,6 +239,26 @@ def contains_forbidden_language(text: str) -> bool:
     so production and evaluation share one phrase list instead of two
     that could silently drift apart."""
     return any(pattern.search(text) for pattern in _FORBIDDEN_PATTERNS)
+
+
+# Phase 2B (Forecast Contract, task scope §6, §15): a numeric
+# probability/odds statement is forbidden in every field, independent
+# of the existing recommendation/target-price guard above (task scope
+# §9: "категориальная уверенность, численные вероятности не
+# вводятся"). Best-effort pattern match, same honest limitation as
+# `_FORBIDDEN_PATTERNS` — not a claim of catching every phrasing.
+_PROBABILITY_PATTERNS = [
+    re.compile(r"\d{1,3}\s?%\s*(chance|probability|likelihood|odds)", re.IGNORECASE),
+    re.compile(r"(chance|probability|likelihood|odds)\s+of\s+\d{1,3}\s?%", re.IGNORECASE),
+    re.compile(r"\d{1,3}\s?%\s*вероятност\w*", re.IGNORECASE | re.UNICODE),
+    re.compile(r"вероятност\w*[^.\n]{0,25}\d{1,3}\s?%", re.IGNORECASE | re.UNICODE),
+]
+
+
+def contains_numeric_probability_language(text: str) -> bool:
+    """Public for the same reuse-in-evaluation reason as
+    `contains_forbidden_language`."""
+    return any(pattern.search(text) for pattern in _PROBABILITY_PATTERNS)
 
 
 class KeyFactSchema(BaseModel):
@@ -224,7 +281,16 @@ class ModelOutputSchema(BaseModel):
     to validate raw model-shaped JSON offline, without duplicating this
     schema. Covers 8 of FR-018's 10 sections — `disclaimer` and
     `data_freshness`/`source_data_as_of` are never model output (see
-    `ai/types.py`'s `InstrumentAnalysis` docstring)."""
+    `ai/types.py`'s `InstrumentAnalysis` docstring).
+
+    Phase 2B: the forecast fields below are validated with a
+    `model_validator` (not just per-field types) — `forecast_state`
+    other than `"forecast"` must carry `directional_view`/`base_case`/
+    `bullish_case`/`bearish_case` all `None` (task scope §12, §7: a
+    no-quality-setup result never carries directional content), and
+    `forecast_state == "forecast"` must carry a non-null
+    `directional_view`. This is enforced locally regardless of what the
+    provider's own strict-schema claim guarantees."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -238,6 +304,30 @@ class ModelOutputSchema(BaseModel):
     considerations: list[str] = Field(min_length=1, max_length=6)
     risks: list[str] = Field(min_length=1, max_length=6)
     key_drivers: list[str] = Field(min_length=1, max_length=5)
+    forecast_state: ForecastState
+    directional_view: DirectionalView | None
+    concise_verdict: str = Field(min_length=1, max_length=600)
+    base_case: str | None = Field(default=None, max_length=1000)
+    bullish_case: str | None = Field(default=None, max_length=1000)
+    bearish_case: str | None = Field(default=None, max_length=1000)
+    catalysts: list[str] = Field(max_length=6)
+    invalidation_conditions: list[str] = Field(max_length=6)
+    what_to_watch_next: list[str] = Field(max_length=6)
+    uncertainty: str = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def _forecast_content_matches_state(self) -> "ModelOutputSchema":
+        if self.forecast_state == ForecastState.FORECAST:
+            if self.directional_view is None:
+                raise ValueError("directional_view is required when forecast_state is 'forecast'")
+        else:
+            if self.directional_view is not None:
+                raise ValueError("directional_view must be null when forecast_state is not 'forecast'")
+            if self.base_case is not None or self.bullish_case is not None or self.bearish_case is not None:
+                raise ValueError(
+                    "base_case/bullish_case/bearish_case must be null when forecast_state is not 'forecast'"
+                )
+        return self
 
 
 class NewsEnrichmentItemSchema(BaseModel):
@@ -383,20 +473,62 @@ class XAIGateway:
                 validated.news_context,
                 validated.insight_hypothesis,
                 validated.confidence_reason,
+                validated.concise_verdict,
+                validated.base_case or "",
+                validated.bullish_case or "",
+                validated.bearish_case or "",
+                validated.uncertainty,
                 *validated.considerations,
                 *validated.risks,
                 *validated.key_drivers,
+                *validated.catalysts,
+                *validated.invalidation_conditions,
+                *validated.what_to_watch_next,
                 *(fact.fact for fact in validated.key_facts),
             ]
         )
         if contains_forbidden_language(combined_text):
             raise AIInvalidOutputError("model output contained forbidden recommendation language")
+        if contains_numeric_probability_language(combined_text):
+            raise AIInvalidOutputError("model output contained a numeric probability statement")
+
+        # Deterministic override (task scope §12): the sufficiency gate
+        # computed *before* this call (`ai/horizon.py`,
+        # `analysis_input.horizon_sufficiency`) is the final authority
+        # on the INSUFFICIENT direction — a model that ignored rule 13
+        # and returned a directional forecast anyway is corrected here,
+        # never trusted over the deterministic signal.
+        forecast_state = validated.forecast_state
+        directional_view = validated.directional_view
+        base_case = validated.base_case
+        bullish_case = validated.bullish_case
+        bearish_case = validated.bearish_case
+        catalysts = tuple(validated.catalysts)
+        invalidation_conditions = tuple(validated.invalidation_conditions)
+        if (
+            analysis_input.horizon_sufficiency is HorizonDataSufficiency.INSUFFICIENT
+            and forecast_state is not ForecastState.INSUFFICIENT_DATA
+        ):
+            logger.info(
+                "ai_analysis operation=generate_instrument_analysis ticker=%s "
+                "status=sufficiency_override model_state=%s",
+                ticker,
+                forecast_state.value,
+            )
+            forecast_state = ForecastState.INSUFFICIENT_DATA
+            directional_view = None
+            base_case = None
+            bullish_case = None
+            bearish_case = None
+            catalysts = ()
+            invalidation_conditions = ()
 
         data_freshness, source_data_as_of = compute_data_freshness(analysis_input)
+        generated_at = datetime.now(timezone.utc)
 
         analysis = InstrumentAnalysis(
             ticker=ticker,
-            generated_at=datetime.now(timezone.utc),
+            generated_at=generated_at,
             summary=validated.summary,
             price_context=validated.price_context,
             news_context=validated.news_context,
@@ -416,6 +548,19 @@ class XAIGateway:
             model=self._model,
             prompt_version=PROMPT_VERSION,
             schema_version=INSIGHT_SCHEMA_VERSION,
+            horizon=analysis_input.horizon,
+            forecast_state=forecast_state,
+            directional_view=directional_view,
+            concise_verdict=validated.concise_verdict,
+            base_case=base_case,
+            bullish_case=bullish_case,
+            bearish_case=bearish_case,
+            catalysts=catalysts,
+            invalidation_conditions=invalidation_conditions,
+            what_to_watch_next=tuple(validated.what_to_watch_next),
+            check_after=compute_check_after(generated_at, analysis_input.horizon),
+            uncertainty=validated.uncertainty,
+            context_categories_used=_context_categories_used(analysis_input),
         )
 
         usage_obj = payload.get("usage")
@@ -676,3 +821,22 @@ def compute_data_freshness(analysis_input: InstrumentAnalysisInput) -> tuple[str
     freshness_text = "; ".join(parts) + "."
     source_data_as_of = price.as_of if price.quote_available else None
     return freshness_text, source_data_as_of
+
+
+def _context_categories_used(analysis_input: InstrumentAnalysisInput) -> tuple[str, ...]:
+    """Phase 2B provenance (`FORECAST_CONTRACT.md` §10: "ссылка на
+    конкретные категории контекста, реально вошедшие в анализ") —
+    deterministic, from what was actually available on this call, never
+    asked of the model. Only names categories from
+    `TARGET_INTELLIGENCE_CONTEXT.md` §2 that this codebase actually
+    implements today (`identity`/`price`/`history`/`news`) — task scope
+    §10 forbids fabricating macro/indices/rates/sector categories that
+    don't exist yet."""
+    categories = ["identity"]
+    if analysis_input.price.quote_available:
+        categories.append("price")
+    if analysis_input.history.history_available:
+        categories.append("history")
+    if analysis_input.news_available and analysis_input.news:
+        categories.append("news")
+    return tuple(categories)

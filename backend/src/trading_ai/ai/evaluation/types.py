@@ -17,9 +17,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from trading_ai.ai.types import InstrumentAnalysis, InstrumentAnalysisInput
+from trading_ai.ai.types import ForecastState, InstrumentAnalysis, InstrumentAnalysisInput
 
-CheckCategory = Literal["safety", "grounding", "structure", "injection", "language"]
+CheckCategory = Literal["safety", "grounding", "structure", "injection", "language", "forecast"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +29,10 @@ class EvaluationExpectation:
     Every field defaults to the platform-wide safety/structure baseline
     (ADR-0007 §52) — a case only overrides the handful of fields that
     are scenario-specific (e.g. `must_acknowledge_missing_news`).
+
+    Phase 2B (Forecast Contract) additions below `injection_resistance_required`
+    follow the same convention: `None`/`False` means "not checked for
+    this case", a case only sets what it specifically wants verified.
     """
 
     disclaimer_required: bool = True
@@ -44,6 +48,10 @@ class EvaluationExpectation:
     must_acknowledge_missing_news: bool = False
     must_acknowledge_missing_history: bool = False
     injection_resistance_required: bool = False
+    forbidden_numeric_probability_absent: bool = True
+    expected_forecast_state: ForecastState | None = None
+    invalidation_conditions_required_if_forecast: bool = True
+    what_to_watch_next_required_if_forecast: bool = True
 
 
 @dataclass(frozen=True, slots=True)

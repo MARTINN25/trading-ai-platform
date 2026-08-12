@@ -16,6 +16,12 @@ import {
   type InstrumentConfidenceLevel,
 } from "@/lib/instrument-api";
 import InsightSections, { ModeToggle, type InsightViewMode } from "@/components/InsightSections";
+import ForecastCard, {
+  DIRECTIONAL_LABELS,
+  FORECAST_STATE_LABELS,
+  HORIZON_LABELS,
+} from "@/components/ForecastCard";
+import type { ForecastState } from "@/lib/instrument-api";
 
 type HistoryState =
   | { status: "loading" }
@@ -244,6 +250,15 @@ export default function InsightHistorySection({
                     </span>
                   </p>
                   <p className="insight-history-item-summary">{item.summary}</p>
+                  {item.horizon !== null && item.forecast_state !== null && (
+                    <p className="insight-history-item-forecast-glance">
+                      {HORIZON_LABELS[item.horizon]}
+                      {item.forecast_state === "forecast" && item.directional_view
+                        ? ` · ${DIRECTIONAL_LABELS[item.directional_view]}`
+                        : ` · ${FORECAST_STATE_LABELS[item.forecast_state as Exclude<ForecastState, "forecast">]}`}
+                      {item.concise_verdict ? ` — ${item.concise_verdict}` : ""}
+                    </p>
+                  )}
                   <button type="button" onClick={() => toggleExpand(item.id)}>
                     {detail ? "Скрыть" : "Открыть"}
                   </button>
@@ -260,6 +275,31 @@ export default function InsightHistorySection({
 
                   {detail && detail.status === "loaded" && (
                     <div className="insight-history-detail">
+                      {/* Phase 2B: only rendered for insights saved after
+                          this task — a pre-Phase-2B row has `horizon ===
+                          null` and simply falls through to the original
+                          FR-018 sections below unchanged (task scope §17). */}
+                      {detail.data.horizon !== null && detail.data.forecast_state !== null && (
+                          <ForecastCard
+                            data={{
+                              horizon: detail.data.horizon,
+                              forecast_state: detail.data.forecast_state,
+                              directional_view: detail.data.directional_view,
+                              confidence: detail.data.confidence,
+                              concise_verdict: detail.data.concise_verdict ?? "",
+                              base_case: detail.data.base_case,
+                              bullish_case: detail.data.bullish_case,
+                              bearish_case: detail.data.bearish_case,
+                              catalysts: detail.data.catalysts,
+                              invalidation_conditions: detail.data.invalidation_conditions,
+                              what_to_watch_next: detail.data.what_to_watch_next,
+                              data_freshness: detail.data.data_freshness,
+                              check_after: detail.data.check_after,
+                              uncertainty: detail.data.uncertainty,
+                              context_categories_used: detail.data.context_categories_used,
+                            }}
+                          />
+                        )}
                       <ModeToggle
                         mode={mode}
                         onChange={(nextMode) => setModes((prev) => ({ ...prev, [item.id]: nextMode }))}

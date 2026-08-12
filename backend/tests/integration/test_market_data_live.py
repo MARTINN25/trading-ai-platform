@@ -23,7 +23,13 @@ from decimal import Decimal
 import pytest
 
 from trading_ai.ai.gateway import XAIGateway
-from trading_ai.ai.types import HistorySummaryFact, InstrumentAnalysisInput, PriceContextFact
+from trading_ai.ai.types import (
+    AnalysisHorizon,
+    HistorySummaryFact,
+    HorizonDataSufficiency,
+    InstrumentAnalysisInput,
+    PriceContextFact,
+)
 from trading_ai.market_data.gateway import TwelveDataGateway
 from trading_ai.market_data.news_gateway import FinnhubNewsGateway
 from trading_ai.market_data.types import InstrumentHistoryPeriod
@@ -152,6 +158,9 @@ def test_live_instrument_analysis_smoke() -> None:
         ),
         news=(),
         news_available=False,
+        horizon=AnalysisHorizon.SHORT,
+        horizon_sufficiency=HorizonDataSufficiency.SUFFICIENT,
+        horizon_sufficiency_reason="",
     )
 
     analysis = asyncio.run(gateway.generate_instrument_analysis(analysis_input))
@@ -164,6 +173,11 @@ def test_live_instrument_analysis_smoke() -> None:
     assert analysis.disclaimer != ""
     assert analysis.generated_at.tzinfo is not None
     assert analysis.provider == "xai"
+    # Phase 2B (Forecast Contract):
+    assert analysis.horizon == AnalysisHorizon.SHORT
+    assert analysis.forecast_state is not None
+    assert analysis.check_after is not None
+    assert analysis.check_after > analysis.generated_at
     # No chain-of-thought/internal-reasoning field exists on this type
     # at all (task scope §14) — nothing to strip, nothing to assert
     # away here beyond the structural guarantee of the dataclass itself.

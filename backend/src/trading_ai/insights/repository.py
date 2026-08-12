@@ -14,7 +14,7 @@ from __future__ import annotations
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from trading_ai.ai.types import ConfidenceLevel, KeyFact
+from trading_ai.ai.types import AnalysisHorizon, ConfidenceLevel, DirectionalView, ForecastState, KeyFact
 from trading_ai.insights.domain import MAX_HISTORY_ITEMS, NewInsight, SavedInsight
 from trading_ai.insights.models import InsightModel
 
@@ -44,6 +44,27 @@ def _to_domain(model: InsightModel) -> SavedInsight:
         model=model.model,
         prompt_version=model.prompt_version,
         schema_version=model.schema_version,
+        horizon=AnalysisHorizon(model.horizon) if model.horizon is not None else None,
+        forecast_state=ForecastState(model.forecast_state) if model.forecast_state is not None else None,
+        directional_view=(
+            DirectionalView(model.directional_view) if model.directional_view is not None else None
+        ),
+        concise_verdict=model.concise_verdict,
+        base_case=model.base_case,
+        bullish_case=model.bullish_case,
+        bearish_case=model.bearish_case,
+        catalysts=tuple(model.catalysts) if model.catalysts is not None else (),
+        invalidation_conditions=(
+            tuple(model.invalidation_conditions) if model.invalidation_conditions is not None else ()
+        ),
+        what_to_watch_next=(
+            tuple(model.what_to_watch_next) if model.what_to_watch_next is not None else ()
+        ),
+        check_after=model.check_after,
+        uncertainty=model.uncertainty,
+        context_categories_used=(
+            tuple(model.context_categories_used) if model.context_categories_used is not None else ()
+        ),
     )
 
 
@@ -74,6 +95,27 @@ class InsightRepository:
             model=insight.model,
             prompt_version=insight.prompt_version,
             schema_version=insight.schema_version,
+            horizon=insight.horizon.value if insight.horizon is not None else None,
+            forecast_state=insight.forecast_state.value if insight.forecast_state is not None else None,
+            directional_view=(
+                insight.directional_view.value if insight.directional_view is not None else None
+            ),
+            concise_verdict=insight.concise_verdict,
+            base_case=insight.base_case,
+            bullish_case=insight.bullish_case,
+            bearish_case=insight.bearish_case,
+            catalysts=list(insight.catalysts) if insight.catalysts else None,
+            invalidation_conditions=(
+                list(insight.invalidation_conditions) if insight.invalidation_conditions else None
+            ),
+            what_to_watch_next=(
+                list(insight.what_to_watch_next) if insight.what_to_watch_next else None
+            ),
+            check_after=insight.check_after,
+            uncertainty=insight.uncertainty,
+            context_categories_used=(
+                list(insight.context_categories_used) if insight.context_categories_used else None
+            ),
         )
         self._session.add(model)
         await self._session.flush()

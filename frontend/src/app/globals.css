@@ -2004,6 +2004,189 @@ textarea::placeholder {
   opacity: 0.6;
 }
 
+/* ---- Phase 2B: Forecast Contract (FR-061/FR-062) ---- */
+
+.insight-history-item-forecast-glance {
+  margin: 0.1rem 0 0.4rem;
+  font-size: 0.82rem;
+  color: var(--focus);
+  line-height: 1.4;
+}
+
+.horizon-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+}
+
+.horizon-selector-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.horizon-button {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  padding: 0.4rem 0.8rem;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+  line-height: 1.3;
+}
+
+.horizon-button-selected {
+  border-color: var(--focus);
+  background: rgba(91, 155, 240, 0.14);
+  color: var(--text-primary);
+}
+
+.horizon-button strong {
+  display: block;
+  font-size: 0.85rem;
+}
+
+.horizon-button span {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+}
+
+.horizon-button-selected span {
+  color: var(--focus);
+}
+
+.forecast-card {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-elevated);
+  padding: var(--panel-padding);
+  margin: 0 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.forecast-card-heading {
+  margin: 0;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+
+.forecast-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.forecast-pill {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  background: var(--surface);
+}
+
+.forecast-pill--horizon {
+  color: var(--focus);
+  border-color: var(--focus);
+}
+
+.forecast-directional {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.forecast-directional--strongly-bullish,
+.forecast-directional--bullish {
+  color: var(--positive);
+}
+
+.forecast-directional--neutral {
+  color: var(--text-secondary);
+}
+
+.forecast-directional--bearish,
+.forecast-directional--strongly-bearish {
+  color: var(--negative);
+}
+
+.forecast-concise-verdict {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.forecast-block h4 {
+  margin: 0 0 0.25rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-tertiary);
+}
+
+.forecast-block p,
+.forecast-block ul {
+  margin: 0;
+  font-size: 0.87rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.forecast-block ul {
+  padding-left: 1.1rem;
+}
+
+.forecast-no-edge {
+  border: 1px dashed var(--warning);
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.85rem;
+  background: rgba(232, 179, 57, 0.08);
+}
+
+.forecast-no-edge-title {
+  margin: 0 0 0.3rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--warning);
+}
+
+.forecast-no-edge-explanation {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.forecast-uncertainty {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.forecast-field-label {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.forecast-meta {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+
 .journal-view > button[type="button"] {
   padding: 0.5rem 1.1rem;
   font-size: 0.9rem;

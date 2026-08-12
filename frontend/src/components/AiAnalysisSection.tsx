@@ -5,9 +5,12 @@ import {
   generateInstrumentAnalysis,
   saveInsight,
   InstrumentApiError,
+  type AnalysisHorizon,
   type InstrumentAiAnalysis,
 } from "@/lib/instrument-api";
 import InsightSections, { ModeToggle, type InsightViewMode } from "@/components/InsightSections";
+import ForecastCard from "@/components/ForecastCard";
+import HorizonSelector from "@/components/HorizonSelector";
 
 type AnalysisState =
   | { status: "idle" }
@@ -62,12 +65,18 @@ export default function AiAnalysisSection({
   // decision: default "Кратко"; resets to default on a fresh
   // generation, same as `saveState` above.
   const [mode, setMode] = useState<InsightViewMode>("short");
+  // FR-006 — visibly selected and changeable before every generation
+  // (task scope §19); a pre-selected value is not a silent backend
+  // default — the user sees and can change it before clicking
+  // "Сгенерировать", and the value actually sent is always this one,
+  // never omitted.
+  const [horizon, setHorizon] = useState<AnalysisHorizon>("short");
 
   function generate(): void {
     setState({ status: "loading" });
     setSaveState({ status: "idle" });
     setMode("short");
-    generateInstrumentAnalysis(ticker)
+    generateInstrumentAnalysis(ticker, horizon)
       .then((data) => setState({ status: "loaded", data }))
       .catch((error: unknown) => {
         const message =
@@ -104,6 +113,8 @@ export default function AiAnalysisSection({
       <h2 id="ai-analysis-heading">AI-анализ</h2>
 
       <div aria-live="polite">
+        <HorizonSelector horizon={horizon} onChange={setHorizon} disabled={isLoading} />
+
         {state.status === "idle" && (
           <div className="ai-analysis-idle">
             <p>AI-анализ ещё не запущен.</p>
@@ -128,6 +139,8 @@ export default function AiAnalysisSection({
 
         {state.status === "loaded" && (
           <div className="ai-analysis-result">
+            <ForecastCard data={state.data} />
+
             <ModeToggle mode={mode} onChange={setMode} />
 
             {/* Plain text children only throughout — React escapes

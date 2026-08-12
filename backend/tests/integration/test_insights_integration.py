@@ -119,6 +119,78 @@ def test_add_and_get_by_id_round_trips_all_fields() -> None:
             assert fetched.schema_version == "insight-structure-v1"
             assert fetched.generated_at.tzinfo is not None
             assert fetched.created_at.tzinfo is not None
+            # Phase 2B (migration 0007): a legacy-shaped insert (no
+            # forecast kwargs given) round-trips with every new column
+            # NULL -> None, never a fabricated default.
+            assert fetched.horizon is None
+            assert fetched.forecast_state is None
+            assert fetched.directional_view is None
+            assert fetched.concise_verdict is None
+            assert fetched.catalysts == ()
+            assert fetched.check_after is None
+        finally:
+            await engine.dispose()
+
+    try:
+        asyncio.run(_run())
+    finally:
+        _delete_ticker(ticker)
+
+
+@pytest.mark.skipif(not _TEST_DATABASE_URL, reason=_SKIP_REASON)
+def test_add_and_get_by_id_round_trips_forecast_fields() -> None:
+    """Phase 2B (migration 0007) — a forecast-bearing insight round-trips
+    through real PostgreSQL exactly like the legacy-shaped one above,
+    proving the additive columns actually persist and read back
+    correctly, not just that they exist in the schema."""
+    test_database_url = _TEST_DATABASE_URL
+    assert test_database_url is not None
+    ticker = _unique_ticker()
+
+    async def _run() -> None:
+        from trading_ai.ai.types import AnalysisHorizon, DirectionalView, ForecastState
+        from trading_ai.infrastructure.database.engine import create_database_engine
+        from trading_ai.infrastructure.database.session import create_session_factory, session_scope
+        from trading_ai.insights.repository import InsightRepository
+
+        engine = create_database_engine(test_database_url)
+        factory = create_session_factory(engine)
+        try:
+            async with session_scope(factory) as session:
+                repository = InsightRepository(session)
+                saved = await repository.add(
+                    _new_insight(
+                        ticker,
+                        prompt_version="instrument-analysis-v3-forecast",
+                        schema_version="insight-structure-v2-forecast",
+                        horizon=AnalysisHorizon.LONG,
+                        forecast_state=ForecastState.FORECAST,
+                        directional_view=DirectionalView.STRONGLY_BULLISH,
+                        concise_verdict="Тестовый вывод.",
+                        base_case="Тестовый базовый сценарий.",
+                        bullish_case="Тестовый бычий сценарий.",
+                        bearish_case="Тестовый медвежий сценарий.",
+                        catalysts=("Тестовый катализатор.",),
+                        invalidation_conditions=("Тестовое условие инвалидации.",),
+                        what_to_watch_next=("Тестовое что отслеживать.",),
+                        check_after=_T,
+                        uncertainty="Тестовая неопределённость.",
+                        context_categories_used=("identity", "price", "history"),
+                    )
+                )
+                fetched = await repository.get_by_id(saved.id)
+
+            assert fetched is not None
+            assert fetched.horizon == AnalysisHorizon.LONG
+            assert fetched.forecast_state == ForecastState.FORECAST
+            assert fetched.directional_view == DirectionalView.STRONGLY_BULLISH
+            assert fetched.concise_verdict == "Тестовый вывод."
+            assert fetched.catalysts == ("Тестовый катализатор.",)
+            assert fetched.invalidation_conditions == ("Тестовое условие инвалидации.",)
+            assert fetched.what_to_watch_next == ("Тестовое что отслеживать.",)
+            assert fetched.check_after == _T
+            assert fetched.uncertainty == "Тестовая неопределённость."
+            assert fetched.context_categories_used == ("identity", "price", "history")
         finally:
             await engine.dispose()
 

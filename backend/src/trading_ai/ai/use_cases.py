@@ -15,14 +15,26 @@ quote is the one required input: without it there is nothing concrete
 to analyze, so its absence raises `AIInsufficientDataError` before the
 LLM is ever called — this keeps a definitely-empty request from
 costing a generation call.
+
+Phase 2B (Forecast Contract, FR-006): `horizon` is now a required
+argument (`AnalysisHorizon`, never silently defaulted — task scope §4)
+that changes which price-history window is fetched
+(`ai/horizon.py`'s `history_period_for_horizon`) and feeds the
+deterministic sufficiency gate (`compute_horizon_sufficiency`) — the
+gate result is threaded into `InstrumentAnalysisInput` as DATA the
+model must respect and is enforced again, independently, by
+`ai/gateway.py` after the model responds.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Protocol
 
+from trading_ai.ai.horizon import compute_horizon_sufficiency, history_period_for_horizon
 from trading_ai.ai.types import (
     AIInsufficientDataError,
+    AnalysisHorizon,
     HistorySummaryFact,
     InstrumentAnalysis,
     InstrumentAnalysisInput,
@@ -38,12 +50,6 @@ from trading_ai.market_data.types import (
     PriceHistory,
 )
 from trading_ai.watchlist.domain import normalize_ticker
-
-# Fixed, backend-only choices — never exposed as request parameters
-# (task scope §6: the endpoint accepts no free-form input beyond the
-# ticker itself). A month gives a more useful "recent trend" summary
-# than a single day without the noise of intraday bars.
-_HISTORY_PERIOD = InstrumentHistoryPeriod.ONE_MONTH
 
 # Bounds the prompt independently of the news section's own UI cap of
 # 10 (task scope §7: "ограничить количество news items").
@@ -86,7 +92,7 @@ class GenerateInstrumentAnalysis:
         self._news_use_case = news_use_case
         self._ai_gateway = ai_gateway
 
-    async def execute(self, raw_ticker: str) -> InstrumentAnalysis:
+    async def execute(self, raw_ticker: str, horizon: AnalysisHorizon) -> InstrumentAnalysis:
         ticker = normalize_ticker(raw_ticker)
 
         try:
@@ -98,10 +104,11 @@ class GenerateInstrumentAnalysis:
 
         price_fact = _build_price_fact(snapshot)
 
+        history_period = history_period_for_horizon(horizon)
         try:
-            history = await self._history_use_case.execute(ticker, _HISTORY_PERIOD.value)
+            history = await self._history_use_case.execute(ticker, history_period.value)
         except (MarketDataError, InvalidPeriodError):
-            history_fact = _unavailable_history_fact()
+            history_fact = _unavailable_history_fact(history_period)
         else:
             history_fact = _summarize_history(history)
 
@@ -118,12 +125,19 @@ class GenerateInstrumentAnalysis:
                 news_facts = _build_news_facts(news)
                 news_available = True
 
+        sufficiency, sufficiency_reason = compute_horizon_sufficiency(
+            horizon, history_fact, price_fact.as_of, datetime.now(timezone.utc)
+        )
+
         analysis_input = InstrumentAnalysisInput(
             ticker=ticker,
             price=price_fact,
             history=history_fact,
             news=news_facts,
             news_available=news_available,
+            horizon=horizon,
+            horizon_sufficiency=sufficiency,
+            horizon_sufficiency_reason=sufficiency_reason,
         )
         return await self._ai_gateway.generate_instrument_analysis(analysis_input)
 
@@ -167,9 +181,9 @@ def _summarize_history(history: PriceHistory) -> HistorySummaryFact:
     )
 
 
-def _unavailable_history_fact() -> HistorySummaryFact:
+def _unavailable_history_fact(period: InstrumentHistoryPeriod) -> HistorySummaryFact:
     return HistorySummaryFact(
-        period=_HISTORY_PERIOD.value,
+        period=period.value,
         first_close=None,
         last_close=None,
         min_close=None,

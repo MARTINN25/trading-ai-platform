@@ -87,15 +87,31 @@ class PricePoint:
 class InstrumentHistoryPeriod(Enum):
     """Application-level chart period contract.
 
-    Frontend and API only ever see these three fixed values — never a
-    raw Twelve Data `interval`/`outputsize` pair (task scope §3).
-    `gateway.py` is the only place that maps a period to
+    Frontend and API only ever see these three original chart-selector
+    values — never a raw Twelve Data `interval`/`outputsize` pair (task
+    scope §3). `gateway.py` is the only place that maps a period to
     provider-specific request parameters.
+
+    Phase 2B (Forecast Contract, task scope §11): `THREE_MONTH`/
+    `ONE_YEAR` are new, *internal* evidence windows for horizon-aware
+    analysis (`ai/horizon.py`), not new chart-UI options — the
+    1D/5D/1M chart selector (`InstrumentDetailsView`/`PriceChartSection`)
+    is unchanged by this task. They live on this same enum, not a
+    parallel one, because both call sites go through the identical
+    `GetInstrumentPriceHistory`/`TwelveDataGateway.get_price_history`
+    path — a second enum would only duplicate `normalize_period`/the
+    provider-params mapping without adding a real distinction. A
+    consequence documented here rather than hidden: `GET
+    /instruments/{ticker}/history?period=3M`/`?period=1Y` becomes
+    technically valid too (additive, not a breaking change — no
+    existing client sends anything but 1D/5D/1M).
     """
 
     ONE_DAY = "1D"
     FIVE_DAY = "5D"
     ONE_MONTH = "1M"
+    THREE_MONTH = "3M"
+    ONE_YEAR = "1Y"
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,7 +9,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from trading_ai.ai.types import ConfidenceLevel, InstrumentAnalysis, KeyFact
+from trading_ai.ai.types import (
+    AnalysisHorizon,
+    ConfidenceLevel,
+    DirectionalView,
+    ForecastState,
+    InstrumentAnalysis,
+    KeyFact,
+)
 from trading_ai.api.routes.instruments import (
     get_generate_instrument_analysis_use_case,
     get_insight_detail_use_case,
@@ -50,8 +57,21 @@ def _sample_analysis(ticker: str = "AAPL") -> InstrumentAnalysis:
         disclaimer="AI-анализ носит информационный характер и не является инвестиционной рекомендацией.",
         provider="xai",
         model="grok-4.5",
-        prompt_version="instrument-analysis-v2",
-        schema_version="insight-structure-v1",
+        prompt_version="instrument-analysis-v3-forecast",
+        schema_version="insight-structure-v2-forecast",
+        horizon=AnalysisHorizon.SHORT,
+        forecast_state=ForecastState.FORECAST,
+        directional_view=DirectionalView.BULLISH,
+        concise_verdict="Умеренно бычий взгляд.",
+        base_case="Цена сохраняет уклон вверх.",
+        bullish_case="Продолжение роста.",
+        bearish_case="Откат при отсутствии подтверждения.",
+        catalysts=("Дальнейшие новости.",),
+        invalidation_conditions=("Пробитие недавнего минимума истории цены вниз.",),
+        what_to_watch_next=("Динамика цены.",),
+        check_after=_T,
+        uncertainty="Данные ограничены.",
+        context_categories_used=("identity", "price", "history", "news"),
     )
 
 
@@ -79,6 +99,19 @@ def _sample_saved_insight(insight_id: int = 1, ticker: str = "AAPL") -> SavedIns
         model=analysis.model,
         prompt_version=analysis.prompt_version,
         schema_version=analysis.schema_version,
+        horizon=analysis.horizon,
+        forecast_state=analysis.forecast_state,
+        directional_view=analysis.directional_view,
+        concise_verdict=analysis.concise_verdict,
+        base_case=analysis.base_case,
+        bullish_case=analysis.bullish_case,
+        bearish_case=analysis.bearish_case,
+        catalysts=analysis.catalysts,
+        invalidation_conditions=analysis.invalidation_conditions,
+        what_to_watch_next=analysis.what_to_watch_next,
+        check_after=analysis.check_after,
+        uncertainty=analysis.uncertainty,
+        context_categories_used=analysis.context_categories_used,
     )
 
 
@@ -86,7 +119,7 @@ class _FakeGenerateInstrumentAnalysis:
     def __init__(self, result: InstrumentAnalysis) -> None:
         self._result = result
 
-    async def execute(self, raw_ticker: str) -> InstrumentAnalysis:
+    async def execute(self, raw_ticker: str, horizon: AnalysisHorizon) -> InstrumentAnalysis:
         return self._result
 
 
@@ -190,8 +223,10 @@ def test_save_insight_success_returns_201_with_full_structure() -> None:
     assert body["id"] == 1
     assert body["key_facts"] == [{"fact": "Цена выросла.", "source": "Текущая котировка"}]
     assert body["confidence"] == "medium"
-    assert body["prompt_version"] == "instrument-analysis-v2"
-    assert body["schema_version"] == "insight-structure-v1"
+    assert body["prompt_version"] == "instrument-analysis-v3-forecast"
+    assert body["schema_version"] == "insight-structure-v2-forecast"
+    assert body["horizon"] == "short"
+    assert body["forecast_state"] == "forecast"
     assert fake.received == ("AAPL", "tok-1")
 
 
@@ -419,7 +454,7 @@ def test_generate_then_save_full_flow_via_real_pending_cache_no_db() -> None:
     app.dependency_overrides[get_insight_repository] = lambda: fake_repository
     client = TestClient(app)
 
-    generate_response = client.post("/instruments/AAPL/analysis")
+    generate_response = client.post("/instruments/AAPL/analysis?horizon=short")
     assert generate_response.status_code == 200
     token = generate_response.json()["analysis_token"]
 

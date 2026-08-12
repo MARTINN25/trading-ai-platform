@@ -23,8 +23,11 @@ from trading_ai.ai.types import (
     AIProviderUnavailableError,
     AIRateLimitedError,
     AITimeoutError,
+    AnalysisHorizon,
     ConfidenceLevel,
+    ForecastState,
     HistorySummaryFact,
+    HorizonDataSufficiency,
     InstrumentAnalysisInput,
     NewsCandidateFact,
     NewsHeadlineFact,
@@ -55,6 +58,17 @@ _FULL_VALID_FIELDS: dict[str, object] = {
         "Часть новостных данных может быть неполной.",
     ],
     "key_drivers": ["Снижение цены на 2%.", "Понижение рейтинга аналитиками."],
+    # Phase 2B (Forecast Contract) — required fields (ai/gateway.py's ModelOutputSchema).
+    "forecast_state": "forecast",
+    "directional_view": "bearish",
+    "concise_verdict": "Умеренно медвежий взгляд на короткий срок.",
+    "base_case": "Цена остаётся под давлением на фоне понижения рейтинга.",
+    "bullish_case": "Стабилизация при отсутствии дальнейших негативных сигналов.",
+    "bearish_case": "Продолжение снижения при дальнейшем ухудшении фона.",
+    "catalysts": ["Дальнейшие комментарии аналитиков."],
+    "invalidation_conditions": ["Возврат цены выше недавнего максимума истории цены."],
+    "what_to_watch_next": ["Дальнейшая динамика цены в ближайшие дни."],
+    "uncertainty": "Ограниченный новостной контекст снижает уверенность в направлении.",
 }
 
 _SUCCESS_CONTENT = json.dumps(_FULL_VALID_FIELDS)
@@ -105,6 +119,9 @@ def _sample_input(news: tuple[NewsHeadlineFact, ...] = ()) -> InstrumentAnalysis
         ),
         news=news,
         news_available=True,
+        horizon=AnalysisHorizon.SHORT,
+        horizon_sufficiency=HorizonDataSufficiency.SUFFICIENT,
+        horizon_sufficiency_reason="",
     )
 
 
@@ -138,8 +155,15 @@ async def test_generate_instrument_analysis_maps_successful_response() -> None:
     # the model's JSON content.
     assert "котировка актуальна" in analysis.data_freshness
     assert analysis.source_data_as_of is not None
-    assert analysis.prompt_version == "instrument-analysis-v2"
-    assert analysis.schema_version == "insight-structure-v1"
+    assert analysis.prompt_version == "instrument-analysis-v3-forecast"
+    assert analysis.schema_version == "insight-structure-v2-forecast"
+    # Phase 2B (Forecast Contract):
+    assert analysis.horizon == AnalysisHorizon.SHORT
+    assert analysis.forecast_state == ForecastState.FORECAST
+    assert analysis.directional_view is not None
+    assert analysis.concise_verdict != ""
+    assert analysis.check_after is not None
+    assert analysis.check_after > analysis.generated_at
 
 
 @pytest.mark.anyio
