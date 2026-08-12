@@ -7,7 +7,8 @@ import {
   InstrumentApiError,
   type InstrumentDetails,
 } from "@/lib/instrument-api";
-import PriceChartSection from "@/components/PriceChartSection";
+import PriceChartSection, { type ActivePeriodHistory } from "@/components/PriceChartSection";
+import MarketSnapshotPanel from "@/components/MarketSnapshotPanel";
 import InstrumentNewsSection from "@/components/InstrumentNewsSection";
 import AiAnalysisSection from "@/components/AiAnalysisSection";
 import InsightHistorySection from "@/components/InsightHistorySection";
@@ -49,13 +50,6 @@ function formatPrice(value: string | null): string | null {
   })}`;
 }
 
-function formatVolume(value: number | null): string | null {
-  if (value === null) {
-    return null;
-  }
-  return value.toLocaleString("ru-RU");
-}
-
 interface FormattedChange {
   text: string;
   direction: "up" | "down" | "flat";
@@ -88,13 +82,40 @@ function formatSource(source: string): string {
   return SOURCE_DISPLAY_NAMES[source] ?? source;
 }
 
+interface Freshness {
+  label: string;
+  stale: boolean;
+}
+
+// Derived purely from the already-fetched `as_of` timestamp — no new
+// field, no fabricated freshness metric. `STALE_THRESHOLD_MINUTES` is a
+// restrained, visible-but-not-alarming signal (task scope §4), not a
+// claim about real market-session staleness rules.
+const STALE_THRESHOLD_MINUTES = 15;
+
+function formatFreshness(value: string): Freshness {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return { label: UNAVAILABLE, stale: false };
+  }
+  const ageMinutes = Math.max(0, Math.round((Date.now() - date.getTime()) / 60000));
+  const stale = ageMinutes > STALE_THRESHOLD_MINUTES;
+  const label = ageMinutes < 1 ? "обновлено только что" : `обновлено ${ageMinutes} мин назад`;
+  return { label, stale };
+}
+
 /**
- * Instrument Workspace (Phase 1, task scope §7) — reorganizes the same
- * five data sections (quote/stats, chart, news, AI analysis, history)
- * into a dense, entity-centric workspace instead of a single narrow
- * column. `PriceChartSection`/`InstrumentNewsSection`/
- * `AiAnalysisSection`/`InsightHistorySection` are unchanged internally
- * — only their composition (grid placement) changes here.
+ * Professional Instrument Workspace (Phase 2B.1) — information
+ * hierarchy: header -> primary market panel (chart + market snapshot)
+ * -> forecast panel (full width, own row) -> intelligence row (news)
+ * -> history. Phase 1 originally put News and AI side by side in one
+ * row; this task gives Forecast its own full-width row instead, since
+ * a multi-screen-tall AI column no longer leaves a half-empty News
+ * column beside it. `PriceChartSection`/`InstrumentNewsSection`/
+ * `AiAnalysisSection`/`InsightHistorySection` remain independently
+ * responsible for their own data fetching — only composition
+ * (placement) changes here, plus the new `MarketSnapshotPanel` reading
+ * `PriceChartSection`'s already-loaded period data.
  */
 export default function InstrumentDetailsView({ ticker }: { ticker: string }) {
   const [state, setState] = useState<ViewState>({ status: "loading" });
@@ -104,6 +125,11 @@ export default function InstrumentDetailsView({ ticker }: { ticker: string }) {
   // page-level state (task scope §14-§16 of the earlier insight-
   // persistence task).
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+  // Reported by `PriceChartSection` (task scope §9) — read-only, so
+  // the market snapshot can derive period high/low without a second,
+  // duplicate history fetch; `PriceChartSection` still owns its own
+  // loading/error state entirely.
+  const [periodHistory, setPeriodHistory] = useState<ActivePeriodHistory | null>(null);
 
   const load = useCallback(() => {
     setState({ status: "loading" });
@@ -151,41 +177,52 @@ export default function InstrumentDetailsView({ ticker }: { ticker: string }) {
         {state.status === "loaded" && <InstrumentHeader data={state.data} />}
       </div>
 
-      {/* B/C. Chart gets the wide primary column; stats sit beside it
-          as a compact panel (task scope §7). Independent of the
-          summary's own loading/error state above — a chart failure
-          never hides an already-loaded summary, and vice versa. */}
+      {/* PRIMARY MARKET PANEL — chart gets the wide primary column;
+          the market snapshot sits beside it as a compact panel
+          (Professional Instrument Workspace, task scope §4). The
+          snapshot's period-range half is populated from the chart's
+          own already-loaded data (`onActivePeriodHistoryChange`), no
+          second fetch. Independent of the header's own loading/error
+          state above — a chart failure never hides an already-loaded
+          header, and vice versa. */}
       <div className="workspace-primary-row">
         <section className="workspace-panel workspace-chart-panel" aria-label="График цены">
-          <PriceChartSection ticker={ticker} />
+          <PriceChartSection ticker={ticker} onActivePeriodHistoryChange={setPeriodHistory} />
         </section>
-        <aside className="workspace-panel workspace-stats-panel" aria-label="Рыночная статистика">
-          <h2>Статистика</h2>
+        <aside className="workspace-panel workspace-stats-panel" aria-label="Рыночный снимок">
+          <h2>Рыночный снимок</h2>
           {state.status === "loaded" ? (
-            <InstrumentStatsPanel data={state.data} />
+            <MarketSnapshotPanel data={state.data} periodHistory={periodHistory} />
           ) : (
             <p className="text-muted">{state.status === "loading" ? "Загрузка…" : UNAVAILABLE}</p>
           )}
         </aside>
       </div>
 
-      {/* D. News + AI analysis side by side — reduces vertical
-          scrolling to reach the AI section (task scope §7). Each
-          section still owns its own independent loading/error state,
-          same rule as before. */}
-      <div className="workspace-intelligence-row">
-        <section className="workspace-panel workspace-news-panel">
-          <InstrumentNewsSection ticker={ticker} />
-        </section>
-        <section className="workspace-panel workspace-ai-panel">
-          <AiAnalysisSection
-            ticker={ticker}
-            onInsightSaved={() => setHistoryRefreshKey((key) => key + 1)}
-          />
-        </section>
-      </div>
+      {/* FORECAST PANEL — full width of its own row: the previous
+          layout squeezed a long AI column into a narrow half next to
+          News, forcing multi-screen scrolling while the other column
+          sat empty (task scope §4). `AiAnalysisSection` owns the
+          horizon selector, `ForecastCard`, and the legacy Short/Full
+          detail internally — unchanged data flow, only its placement
+          changes here. */}
+      <section className="workspace-panel workspace-forecast-panel" aria-label="AI прогноз">
+        <AiAnalysisSection
+          ticker={ticker}
+          currentPrice={state.status === "loaded" ? state.data.price : null}
+          onInsightSaved={() => setHistoryRefreshKey((key) => key + 1)}
+        />
+      </section>
 
-      {/* E. History remains reachable without dominating the initial
+      {/* INTELLIGENCE ROW — News Intelligence, full width, natural
+          document flow (task scope §14: no forced tall column next to
+          a much-shorter neighbor now that Forecast has its own row
+          above). */}
+      <section className="workspace-panel workspace-news-panel" aria-label="Новости">
+        <InstrumentNewsSection ticker={ticker} />
+      </section>
+
+      {/* HISTORY — remains reachable without dominating the initial
           viewport — a full-width panel below the fold, same
           independent loading/error/empty state as before. */}
       <section className="workspace-history-panel">
@@ -203,52 +240,38 @@ export default function InstrumentDetailsView({ ticker }: { ticker: string }) {
 function InstrumentHeader({ data }: { data: InstrumentDetails }) {
   const price = formatPrice(data.price);
   const change = formatChange(data.change, data.change_percent);
+  const freshness = formatFreshness(data.as_of);
 
   return (
     <header className="instrument-header">
-      <h1 className="instrument-ticker">{data.ticker}</h1>
-      <p className="instrument-price">{price ?? UNAVAILABLE}</p>
-      {change ? (
-        <p
-          className={`instrument-change instrument-change-${change.direction}`}
-          aria-label={
-            change.direction === "up" ? "рост" : change.direction === "down" ? "падение" : "без изменений"
-          }
-        >
-          {change.text}
-        </p>
-      ) : (
-        <p className="instrument-change-unavailable">{UNAVAILABLE}</p>
-      )}
+      <div className="instrument-header-primary">
+        <h1 className="instrument-ticker">{data.ticker}</h1>
+        <div className="instrument-price-block">
+          <span className="instrument-price">{price ?? UNAVAILABLE}</span>
+          {change ? (
+            <span
+              className={`instrument-change instrument-change-${change.direction}`}
+              aria-label={
+                change.direction === "up" ? "рост" : change.direction === "down" ? "падение" : "без изменений"
+              }
+            >
+              {change.text}
+            </span>
+          ) : (
+            <span className="instrument-change-unavailable">{UNAVAILABLE}</span>
+          )}
+        </div>
+      </div>
       <div className="instrument-header-meta">
-        <span>Обновлено: {formatAsOf(data.as_of)}</span>
+        <span
+          className={freshness.stale ? "instrument-freshness instrument-freshness-stale" : "instrument-freshness"}
+          title={formatAsOf(data.as_of)}
+        >
+          {freshness.stale && <span className="instrument-freshness-dot" aria-hidden="true" />}
+          {freshness.label}
+        </span>
         <span>Источник: {formatSource(data.source)}</span>
       </div>
     </header>
-  );
-}
-
-function InstrumentStatsPanel({ data }: { data: InstrumentDetails }) {
-  const stats: Array<{ label: string; value: string | null }> = [
-    { label: "Open", value: formatPrice(data.open) },
-    { label: "High", value: formatPrice(data.high) },
-    { label: "Low", value: formatPrice(data.low) },
-    { label: "Previous close", value: formatPrice(data.previous_close) },
-    { label: "Volume", value: formatVolume(data.volume) },
-  ];
-
-  return (
-    <dl className="instrument-stats-grid">
-      {stats.map((stat) => (
-        <div className="instrument-stat" key={stat.label}>
-          <dt className="instrument-stat-label">{stat.label}</dt>
-          <dd className="instrument-stat-value">{stat.value ?? UNAVAILABLE}</dd>
-        </div>
-      ))}
-      <div className="instrument-stat">
-        <dt className="instrument-stat-label">Source</dt>
-        <dd className="instrument-stat-value">{formatSource(data.source)}</dd>
-      </div>
-    </dl>
   );
 }

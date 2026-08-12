@@ -17,6 +17,7 @@ import {
 } from "@/lib/instrument-api";
 import InsightSections, { ModeToggle, type InsightViewMode } from "@/components/InsightSections";
 import ForecastCard, {
+  DIRECTIONAL_CLASS,
   DIRECTIONAL_LABELS,
   FORECAST_STATE_LABELS,
   HORIZON_LABELS,
@@ -241,25 +242,48 @@ export default function InsightHistorySection({
               const outcomeDraft = outcomeDrafts[item.id] ?? "";
               return (
                 <li key={item.id} className="insight-history-item">
-                  <p className="insight-history-item-meta">
-                    {formatTimestamp(item.created_at)} · Уверенность:{" "}
-                    <span
-                      className={`insight-history-confidence insight-history-confidence-${item.confidence}`}
-                    >
-                      {CONFIDENCE_LABELS[item.confidence]}
-                    </span>
-                  </p>
-                  <p className="insight-history-item-summary">{item.summary}</p>
-                  {item.horizon !== null && item.forecast_state !== null && (
-                    <p className="insight-history-item-forecast-glance">
-                      {HORIZON_LABELS[item.horizon]}
-                      {item.forecast_state === "forecast" && item.directional_view
-                        ? ` · ${DIRECTIONAL_LABELS[item.directional_view]}`
-                        : ` · ${FORECAST_STATE_LABELS[item.forecast_state as Exclude<ForecastState, "forecast">]}`}
-                      {item.concise_verdict ? ` — ${item.concise_verdict}` : ""}
-                    </p>
+                  {/* Compact timeline row (task scope §14): time + chips
+                      first, a short verdict line second — never a
+                      paragraph as the first thing in the row. Legacy
+                      (pre-Phase-2B) rows have no horizon/forecast_state
+                      to build chips from, so they fall back to the
+                      original plain meta+summary line, honestly. */}
+                  {item.horizon !== null && item.forecast_state !== null ? (
+                    <>
+                      <div className="insight-history-row">
+                        <span className="insight-history-time">{formatTimestamp(item.created_at)}</span>
+                        <span className="insight-history-chip insight-history-chip--horizon">
+                          {HORIZON_LABELS[item.horizon]}
+                        </span>
+                        {item.forecast_state === "forecast" && item.directional_view ? (
+                          <span
+                            className={`insight-history-chip ${DIRECTIONAL_CLASS[item.directional_view]}`}
+                          >
+                            {DIRECTIONAL_LABELS[item.directional_view]}
+                          </span>
+                        ) : (
+                          <span className="insight-history-chip insight-history-chip--state">
+                            {FORECAST_STATE_LABELS[item.forecast_state as Exclude<ForecastState, "forecast">]}
+                          </span>
+                        )}
+                        <span className="insight-history-chip">{CONFIDENCE_LABELS[item.confidence]}</span>
+                      </div>
+                      <p className="insight-history-item-verdict">{item.concise_verdict || item.summary}</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="insight-history-item-meta">
+                        {formatTimestamp(item.created_at)} · Уверенность:{" "}
+                        <span
+                          className={`insight-history-confidence insight-history-confidence-${item.confidence}`}
+                        >
+                          {CONFIDENCE_LABELS[item.confidence]}
+                        </span>
+                      </p>
+                      <p className="insight-history-item-summary">{item.summary}</p>
+                    </>
                   )}
-                  <button type="button" onClick={() => toggleExpand(item.id)}>
+                  <button type="button" className="insight-history-toggle" onClick={() => toggleExpand(item.id)}>
                     {detail ? "Скрыть" : "Открыть"}
                   </button>
 
@@ -297,14 +321,28 @@ export default function InsightHistorySection({
                               check_after: detail.data.check_after,
                               uncertainty: detail.data.uncertainty,
                               context_categories_used: detail.data.context_categories_used,
+                              key_facts: detail.data.key_facts,
+                              key_drivers: detail.data.key_drivers,
                             }}
                           />
                         )}
-                      <ModeToggle
-                        mode={mode}
-                        onChange={(nextMode) => setModes((prev) => ({ ...prev, [item.id]: nextMode }))}
-                      />
-                      <InsightSections data={detail.data} mode={mode} />
+                      {/* Legacy FR-018 content — preserved, visually
+                          secondary (Professional Instrument Workspace,
+                          task scope §12-§13), same collapsible pattern
+                          as the fresh-generation view. Pre-Phase-2B
+                          rows (`horizon === null`, no `ForecastCard`
+                          above) still show this expanded-by-default via
+                          `open`, since it is the *only* content they have. */}
+                      <details className="ai-analysis-detail" open={detail.data.horizon === null}>
+                        <summary>Подробный анализ (10 разделов FR-018)</summary>
+                        <div className="ai-analysis-detail-body">
+                          <ModeToggle
+                            mode={mode}
+                            onChange={(nextMode) => setModes((prev) => ({ ...prev, [item.id]: nextMode }))}
+                          />
+                          <InsightSections data={detail.data} mode={mode} />
+                        </div>
+                      </details>
                       <p className="insight-history-detail-provenance">
                         {detail.data.provider} / {detail.data.model} · prompt{" "}
                         {detail.data.prompt_version} · schema {detail.data.schema_version}

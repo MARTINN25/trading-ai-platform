@@ -40,10 +40,23 @@ export interface InstrumentDetails {
  */
 export type InstrumentHistoryPeriod = "1D" | "5D" | "1M";
 
+/**
+ * Phase 2B.1 (Professional Instrument Workspace): `open`/`high`/`low`/
+ * `volume` are genuine, real per-bar values already parsed by the
+ * backend's Twelve Data adapter — additive, nullable fields, not a new
+ * provider capability. `null` only when the provider's own response
+ * didn't include/couldn't parse that specific field for that specific
+ * bar — never fabricated by this client. `close` remains the one
+ * field every point is guaranteed to have.
+ */
 export interface InstrumentHistoryPoint {
   timestamp: string;
+  open: string | null;
+  high: string | null;
+  low: string | null;
   /** Backend `Decimal`, serialized as a string — see `InstrumentDetails.price`. */
   close: string;
+  volume: number | null;
 }
 
 export interface InstrumentPriceHistory {
@@ -436,12 +449,23 @@ export async function getInstrumentDetails(ticker: string): Promise<InstrumentDe
   return data;
 }
 
+function isNullableNumber(value: unknown): value is number | null {
+  return value === null || typeof value === "number";
+}
+
 function isInstrumentHistoryPoint(value: unknown): value is InstrumentHistoryPoint {
   if (typeof value !== "object" || value === null) {
     return false;
   }
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.timestamp === "string" && typeof candidate.close === "string";
+  return (
+    typeof candidate.timestamp === "string" &&
+    isNullableString(candidate.open) &&
+    isNullableString(candidate.high) &&
+    isNullableString(candidate.low) &&
+    typeof candidate.close === "string" &&
+    isNullableNumber(candidate.volume)
+  );
 }
 
 function isInstrumentPriceHistory(value: unknown): value is InstrumentPriceHistory {
