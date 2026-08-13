@@ -9,14 +9,15 @@ browser/user"), a symbol subscription registry with reference counts
 concretely, task scope §20) and on a small REST quote protocol (reused,
 not duplicated, from the existing `TwelveDataGateway`, task scope §14).
 
-Not wired into `main.py`/FastAPI's lifespan in this slice — a
-deliberate, explicitly-sanctioned scope reduction (task scope §22:
-"if startup integration materially increases scope: implement manager
-independently now and defer FastAPI wiring to 2C.3"). This class is
-fully instantiable, startable, and stoppable standalone; `2C.3` is
-expected to construct one instance in `main.py`'s lifespan and expose
-it via `app.state`, the same optional-feature pattern already used for
-the other three provider gateways there.
+Wired into `main.py`'s FastAPI lifespan as of Phase 2C.3 — one instance
+per process, constructed in `app.state.live_market_manager`, the same
+optional-feature pattern already used for the other three provider
+gateways there. `get_state_with_revision`/`wait_for_change` (Phase 2C.3,
+task scope §10/§19) are the observer/subscriber mechanism the SSE route
+(`api/routes/live_market.py`) uses to await state changes instead of
+polling `get_state()` in a tight loop; both live here, not in
+`live_state.py` (task scope §19: revision is a manager-level delivery
+concept, not a domain concept).
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Protocol
@@ -133,6 +134,19 @@ class _QuoteGatewayLike(Protocol):
 class _Subscription:
     ref_count: int
     state: InstrumentLiveState
+    # Phase 2C.3 (SSE delivery, task scope §10/§19): a monotonically
+    # increasing per-symbol revision plus a replaceable `asyncio.Event`
+    # is the smallest provider-agnostic observer mechanism that lets an
+    # SSE (or any future) consumer *await* the next change instead of
+    # polling `get_state()` in a tight loop. Deliberately not part of
+    # `InstrumentLiveState`/`live_state.py` (task scope §10/§19: "do not
+    # put UI-specific revision semantics in live_state.py") — this is a
+    # manager-level delivery concept, not a domain concept. `changed` is
+    # replaced (not `.clear()`-ed) on every bump so that concurrently
+    # waiting consumers never race a clear() against a fresh waiter that
+    # arrived between the bump and the clear.
+    revision: int = 0
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,6 +311,59 @@ class LiveMarketManager:
         subscription = self._subscriptions.get(ticker)
         return subscription.state if subscription is not None else None
 
+    def get_state_with_revision(self, symbol: str) -> tuple[InstrumentLiveState, int] | None:
+        """Current state plus its monotonic revision (task scope §19) —
+        the building block an SSE (or any future) consumer uses for an
+        initial snapshot and to later ask `wait_for_change` "tell me
+        when this is no longer true"."""
+        ticker = normalize_ticker(symbol)
+        subscription = self._subscriptions.get(ticker)
+        if subscription is None:
+            return None
+        return subscription.state, subscription.revision
+
+    async def wait_for_change(
+        self, symbol: str, since_revision: int, *, timeout: float | None = None
+    ) -> tuple[InstrumentLiveState, int] | None:
+        """Block until `symbol`'s revision differs from `since_revision`,
+        or `timeout` elapses first (task scope §10, §18, §11).
+
+        Returns the *latest* state/revision as soon as they differ —
+        never an intermediate one: if several mutations land while
+        nobody is waiting, or while a slow consumer is still handling
+        the previous result, the very next call already observes the
+        newest revision and transparently skips everything in between.
+        This is the whole backpressure/coalescing story for this task
+        (§11, §18) — there is no per-consumer queue to bound or overflow,
+        because "latest revision wins" already caps memory at one state
+        object per symbol regardless of how many updates happened or how
+        many consumers are subscribed.
+
+        Returns `None` on timeout, or if `symbol` is no longer
+        subscribed by anyone (a benign race with a concurrent
+        `unsubscribe` — never an error).
+
+        No tight polling loop (task scope §10): suspends on an
+        `asyncio.Event` and is only woken by an actual state mutation
+        (`_set_state`) or the timeout — never a fixed-interval `sleep`.
+        """
+        ticker = normalize_ticker(symbol)
+        while True:
+            async with self._lock:
+                subscription = self._subscriptions.get(ticker)
+                if subscription is None:
+                    return None
+                if subscription.revision != since_revision:
+                    return subscription.state, subscription.revision
+                event = subscription.changed
+            if timeout is not None:
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=timeout)
+                except TimeoutError:
+                    return None
+            else:
+                await event.wait()
+
     def health_snapshot(self) -> ManagerHealth:
         return ManagerHealth(
             run_mode=self._run_mode,
@@ -337,7 +404,7 @@ class LiveMarketManager:
                 return  # unsubscribed while the REST call was in flight
             state = apply_authoritative_snapshot(subscription.state, event)
             state = with_market_state(state, market_state)
-            subscription.state = state
+            self._set_state(subscription, state)
 
     async def _run_poll_loop(self) -> None:
         self._run_mode = RunMode.POLLING_FALLBACK
@@ -463,7 +530,8 @@ class LiveMarketManager:
                 return
             try:
                 state = apply_price_update(subscription.state, event, self._interval_policy)
-                subscription.state = with_connection_state(state, ConnectionState.LIVE)
+                state = with_connection_state(state, ConnectionState.LIVE)
+                self._set_state(subscription, state)
             except Exception:
                 # `live_state` itself rejects a malformed/mismatched
                 # event with a typed error (defense in depth, task
@@ -480,6 +548,27 @@ class LiveMarketManager:
         # perspective (no other coroutine can interleave mid-iteration
         # in a single-threaded cooperative scheduler), so no explicit
         # lock is needed here even though `_subscriptions` is shared
-        # mutable state (task scope §21).
+        # mutable state (task scope §21). Same reasoning covers
+        # `_set_state`'s own revision bump/event replacement below.
         for subscription in self._subscriptions.values():
-            subscription.state = with_connection_state(subscription.state, connection_state)
+            self._set_state(subscription, with_connection_state(subscription.state, connection_state))
+
+    def _set_state(self, subscription: _Subscription, new_state: InstrumentLiveState) -> None:
+        """The one place `_Subscription.state` is ever written (task
+        scope §19) — bumps `revision` and wakes any `wait_for_change`
+        waiters, but only on a *genuine* change. `InstrumentLiveState` is
+        a frozen dataclass with structural equality, so a call that would
+        set the exact same value (e.g. `_mark_all(ConnectionState.LIVE)`
+        on an already-`LIVE` symbol, or `apply_price_update`'s own
+        documented same-timestamp no-op) is a true no-op here too — no
+        revision bump, no SSE `update` event, directly serving the
+        "do not create unnecessary browser churn" requirement (task
+        scope §18) without any special-casing at the SSE layer.
+        """
+        if new_state == subscription.state:
+            return
+        subscription.state = new_state
+        subscription.revision += 1
+        old_event = subscription.changed
+        subscription.changed = asyncio.Event()
+        old_event.set()

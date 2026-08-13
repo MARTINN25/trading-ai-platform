@@ -26,6 +26,7 @@ from trading_ai.api.routes.instruments import register_instruments_exception_han
 from trading_ai.api.routes.instruments import router as instruments_router
 from trading_ai.api.routes.journal import register_journal_exception_handlers
 from trading_ai.api.routes.journal import router as journal_router
+from trading_ai.api.routes.live_market import router as live_market_router
 from trading_ai.api.routes.ready import router as ready_router
 from trading_ai.api.routes.watchlist import register_watchlist_exception_handlers
 from trading_ai.api.routes.watchlist import router as watchlist_router
@@ -34,7 +35,9 @@ from trading_ai.infrastructure.database.engine import create_database_engine
 from trading_ai.infrastructure.database.session import create_session_factory
 from trading_ai.logging import configure_logging
 from trading_ai.market_data.gateway import TwelveDataGateway
+from trading_ai.market_data.live_manager import LiveMarketManager
 from trading_ai.market_data.news_gateway import FinnhubNewsGateway
+from trading_ai.market_data.twelve_data_stream import TwelveDataStreamClient
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +82,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         app.state.market_data_gateway = None
 
+    # Phase 2C.3: one process-local LiveMarketManager (task scope §5/§6
+    # — never one per request/browser tab), built only when market data
+    # is configured at all, reusing the same gateway constructed above
+    # for REST bootstrap/fallback rather than a second instance. When
+    # `TRADING_AI_LIVE_STREAMING_ENABLED=false`, `stream_client` stays
+    # `None`, which `LiveMarketManager.start()` already treats as
+    # "run in REST-poll-only mode" (Phase 2C.2) — no separate feature
+    # flag branch is needed here. A missing/disabled key degrades only
+    # `GET /instruments/{ticker}/live-stream` (503), never the rest of
+    # the application (same optional-feature pattern as the three
+    # gateways above); `manager.start()` only schedules a background
+    # task and cannot itself raise, so it cannot crash startup either.
+    live_market_manager: LiveMarketManager | None = None
+    if settings.market_data_api_key is not None:
+        stream_client = (
+            TwelveDataStreamClient(api_key=settings.market_data_api_key)
+            if settings.market_data_live_streaming_enabled
+            else None
+        )
+        live_market_manager = LiveMarketManager(
+            stream_client=stream_client,
+            quote_gateway=app.state.market_data_gateway,
+            poll_interval_seconds=settings.market_data_live_poll_interval_seconds,
+        )
+        await live_market_manager.start()
+    else:
+        logger.warning(
+            "TRADING_AI_MARKET_DATA_API_KEY is not set; live market streaming is disabled."
+        )
+    app.state.live_market_manager = live_market_manager
+
     # Same optional-feature pattern, separate provider/secret (Finnhub,
     # news only): no key, no gateway, GET /instruments/{ticker}/news
     # reports 503 — nothing else is affected.
@@ -106,6 +140,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        # Stop the manager before disposing the DB engine — no ordering
+        # dependency between the two, but shutting down the
+        # longer-lived background task first keeps shutdown log output
+        # readable. `LiveMarketManager.stop()` cancels its own
+        # background task, closes the stream client, and never raises
+        # (task scope §5: "no pending task warnings, no zombie
+        # reconnect loops").
+        if live_market_manager is not None:
+            await live_market_manager.stop()
         if engine is not None:
             await engine.dispose()
 
@@ -135,6 +178,7 @@ def create_app() -> FastAPI:
     app.include_router(ready_router)
     app.include_router(watchlist_router)
     app.include_router(instruments_router)
+    app.include_router(live_market_router)
     app.include_router(evaluations_router)
     app.include_router(journal_router)
     register_watchlist_exception_handlers(app)
