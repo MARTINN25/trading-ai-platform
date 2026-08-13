@@ -53,6 +53,13 @@ class Settings:
     news_api_key: str | None
     llm_api_key: str | None
     llm_model: str
+    # Phase 2C.2 (live-provider adapter) — deliberately minimal: the WS
+    # URL/heartbeat/subscribe shape are provider constants (task scope
+    # §6: "Add only minimal config needed"), not configuration; only
+    # the two genuinely deployment-tunable knobs are exposed. Reuses
+    # `market_data_api_key` above — no new secret.
+    market_data_live_streaming_enabled: bool
+    market_data_live_poll_interval_seconds: float
 
 
 def get_settings() -> Settings:
@@ -89,6 +96,18 @@ def get_settings() -> Settings:
         # defaulting to the current documented flagship text/chat model
         # (`ai/gateway.py` module docstring has the full reasoning).
         llm_model=os.environ.get("TRADING_AI_LLM_MODEL", "grok-4.5"),
+        # Phase 2C.2: lets a deployment disable WebSocket connection
+        # attempts entirely (e.g. a known sub-Pro Twelve Data plan,
+        # task scope §6/§7 — "do not hardcode assumption that WebSocket
+        # access exists") and fall straight to REST polling, without
+        # code changes.
+        market_data_live_streaming_enabled=_get_bool("TRADING_AI_LIVE_STREAMING_ENABLED", True),
+        # Conservative default (task scope §15: "no aggressive
+        # polling") — one REST /quote call per subscribed symbol per
+        # interval, not per browser tab/component.
+        market_data_live_poll_interval_seconds=float(
+            os.environ.get("TRADING_AI_LIVE_POLL_INTERVAL_SECONDS", "15")
+        ),
     )
 
 

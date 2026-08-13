@@ -105,6 +105,44 @@ async def test_get_quote_maps_successful_response() -> None:
     assert quote.change_percent == Decimal("1.09400")
     assert quote.source == SOURCE
     assert quote.as_of.tzinfo is not None
+    assert quote.is_market_open is False
+
+
+@pytest.mark.anyio
+async def test_get_quote_is_market_open_true_is_mapped() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={**_SUCCESS_PAYLOAD, "is_market_open": True})
+
+    quote = await _gateway(handler).get_quote("AAPL")
+
+    assert quote.is_market_open is True
+
+
+@pytest.mark.anyio
+async def test_get_quote_missing_is_market_open_is_none_not_guessed() -> None:
+    payload = dict(_SUCCESS_PAYLOAD)
+    del payload["is_market_open"]
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    quote = await _gateway(handler).get_quote("AAPL")
+
+    assert quote.is_market_open is None
+
+
+@pytest.mark.anyio
+async def test_get_quote_non_boolean_is_market_open_is_none_not_coerced() -> None:
+    """Twelve Data documents this as a plain boolean (task scope §12) —
+    a string/int look-alike must never be silently coerced to `True`/
+    `False`."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={**_SUCCESS_PAYLOAD, "is_market_open": "true"})
+
+    quote = await _gateway(handler).get_quote("AAPL")
+
+    assert quote.is_market_open is None
 
 
 @pytest.mark.anyio

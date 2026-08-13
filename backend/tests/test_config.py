@@ -97,3 +97,35 @@ def test_settings_cors_origins_drop_empty_entries(monkeypatch: pytest.MonkeyPatc
     settings = get_settings()
 
     assert settings.cors_origins == ("https://app.example.com",)
+
+
+def test_settings_live_streaming_enabled_defaults_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TRADING_AI_LIVE_STREAMING_ENABLED", raising=False)
+
+    settings = get_settings()
+
+    assert settings.market_data_live_streaming_enabled is True
+
+
+def test_settings_live_streaming_enabled_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRADING_AI_LIVE_STREAMING_ENABLED", "false")
+
+    settings = get_settings()
+
+    assert settings.market_data_live_streaming_enabled is False
+
+
+def test_settings_live_poll_interval_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TRADING_AI_LIVE_POLL_INTERVAL_SECONDS", raising=False)
+
+    settings = get_settings()
+
+    assert settings.market_data_live_poll_interval_seconds == 15.0
+
+
+def test_settings_live_poll_interval_can_be_overridden(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRADING_AI_LIVE_POLL_INTERVAL_SECONDS", "30")
+
+    settings = get_settings()
+
+    assert settings.market_data_live_poll_interval_seconds == 30.0
