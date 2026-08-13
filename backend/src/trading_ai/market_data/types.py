@@ -25,7 +25,19 @@ from enum import Enum
 
 @dataclass(frozen=True, slots=True)
 class MarketQuote:
-    """A single point-in-time quote. Never constructed with guessed/zero values."""
+    """A single point-in-time quote. Never constructed with guessed/zero values.
+
+    Phase 2C.2 (live-provider adapter, task scope §12/§14): `is_market_open`
+    is Twelve Data's own `/quote`-response boolean, additive and
+    optional — `None` when the provider's response didn't include it or
+    it wasn't a real JSON boolean, never guessed. It is deliberately a
+    plain tri-state signal (`True`/`False`/`None`), not a richer session
+    enum: the provider's own docs (confirmed live, `/quote` and
+    `/market_state` both) expose only this one boolean, with no
+    separate pre-market/after-hours field — a caller mapping this to
+    `market_data.live_state.MarketState` must not invent a distinction
+    this field cannot actually support (see `live_manager.py`).
+    """
 
     ticker: str
     price: Decimal
@@ -33,6 +45,7 @@ class MarketQuote:
     change_percent: Decimal
     as_of: datetime
     source: str
+    is_market_open: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

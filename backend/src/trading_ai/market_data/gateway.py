@@ -295,6 +295,7 @@ class TwelveDataGateway:
             change_percent=change_percent,
             as_of=as_of,
             source=SOURCE,
+            is_market_open=_optional_bool(payload.get("is_market_open")),
         )
 
     def _parse_snapshot(self, ticker: str, response: httpx.Response) -> InstrumentSnapshot:
@@ -609,3 +610,14 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _optional_bool(value: Any) -> bool | None:
+    """Strict — only a real JSON boolean is accepted (Twelve Data
+    documents `is_market_open` as a plain boolean, task scope §12);
+    a string `"true"`/`"false"` or a `0`/`1` int is never coerced,
+    the same "don't guess a provider's own type" discipline as every
+    other `_optional_*` helper here."""
+    if isinstance(value, bool):
+        return value
+    return None
