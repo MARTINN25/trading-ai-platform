@@ -632,3 +632,132 @@ def test_health_snapshot_never_contains_api_key() -> None:
 
     assert _FAKE_API_KEY not in repr(snapshot)
     assert _FAKE_API_KEY not in str(snapshot)
+
+
+# --- revision / wait_for_change: Phase 2C.3 (SSE delivery) task scope §10/§19 --
+
+
+def test_get_state_with_revision_returns_none_for_unknown_symbol() -> None:
+    manager = LiveMarketManager(None, FakeQuoteGateway())
+
+    assert manager.get_state_with_revision("AAPL") is None
+
+
+@pytest.mark.anyio
+async def test_revision_starts_at_zero_and_increments_on_real_change() -> None:
+    gateway = FakeQuoteGateway()
+    gateway.set_quote("AAPL", _quote("AAPL", "100", as_of=_T0))
+    manager = LiveMarketManager(None, gateway)
+
+    await manager.subscribe("AAPL")
+    state, revision = manager.get_state_with_revision("AAPL")  # type: ignore[misc]
+    assert revision == 1  # the REST bootstrap during subscribe() is itself a real change from bootstrap_state()
+    assert state.last_price == Decimal("100")
+
+    await manager._apply_rest_quote("AAPL", _quote("AAPL", "101", as_of=_T0 + timedelta(seconds=5)))
+    state, revision = manager.get_state_with_revision("AAPL")  # type: ignore[misc]
+    assert revision == 2
+    assert state.last_price == Decimal("101")
+
+
+@pytest.mark.anyio
+async def test_revision_does_not_increment_on_structural_noop() -> None:
+    """A `_mark_all` call that would set the exact same `ConnectionState`
+    already held must not bump the revision (task scope §18: no
+    unnecessary SSE churn)."""
+    gateway = FakeQuoteGateway()
+    gateway.set_quote("AAPL", _quote("AAPL", "100", as_of=_T0))
+    manager = LiveMarketManager(None, gateway)
+    await manager.subscribe("AAPL")
+    _, revision_before = manager.get_state_with_revision("AAPL")  # type: ignore[misc]
+
+    # bootstrap_state() defaults to CONNECTING; _apply_rest_quote never
+    # touches connection_state, so it is still CONNECTING here — marking
+    # it CONNECTING again must be a true no-op.
+    manager._mark_all(ConnectionState.CONNECTING)
+
+    _, revision_after = manager.get_state_with_revision("AAPL")  # type: ignore[misc]
+    assert revision_after == revision_before
+
+
+@pytest.mark.anyio
+async def test_wait_for_change_returns_immediately_if_already_stale() -> None:
+    gateway = FakeQuoteGateway()
+    gateway.set_quote("AAPL", _quote("AAPL", "100", as_of=_T0))
+    manager = LiveMarketManager(None, gateway)
+    await manager.subscribe("AAPL")
+
+    result = await asyncio.wait_for(manager.wait_for_change("AAPL", since_revision=0), timeout=2.0)
+
+    assert result is not None
+    state, revision = result
+    assert revision == 1
+    assert state.last_price == Decimal("100")
+
+
+@pytest.mark.anyio
+async def test_wait_for_change_returns_none_on_timeout_with_no_change() -> None:
+    gateway = FakeQuoteGateway()
+    gateway.set_quote("AAPL", _quote("AAPL", "100", as_of=_T0))
+    manager = LiveMarketManager(None, gateway)
+    await manager.subscribe("AAPL")
+    _, revision = manager.get_state_with_revision("AAPL")  # type: ignore[misc]
+
+    result = await asyncio.wait_for(
+        manager.wait_for_change("AAPL", since_revision=revision, timeout=0.05), timeout=2.0
+    )
+
+    assert result is None
+
+
+@pytest.mark.anyio
+async def test_wait_for_change_returns_none_for_unknown_symbol() -> None:
+    manager = LiveMarketManager(None, FakeQuoteGateway())
+
+    result = await asyncio.wait_for(manager.wait_for_change("AAPL", since_revision=0), timeout=2.0)
+
+    assert result is None
+
+
+@pytest.mark.anyio
+async def test_wait_for_change_wakes_on_a_later_mutation() -> None:
+    gateway = FakeQuoteGateway()
+    gateway.set_quote("AAPL", _quote("AAPL", "100", as_of=_T0))
+    manager = LiveMarketManager(None, gateway)
+    await manager.subscribe("AAPL")
+    _, revision = manager.get_state_with_revision("AAPL")  # type: ignore[misc]
+
+    waiter = asyncio.create_task(manager.wait_for_change("AAPL", since_revision=revision, timeout=5.0))
+    await asyncio.sleep(0)  # let the waiter actually start waiting before we mutate
+    await manager._apply_rest_quote("AAPL", _quote("AAPL", "105", as_of=_T0 + timedelta(seconds=1)))
+
+    result = await asyncio.wait_for(waiter, timeout=2.0)
+    assert result is not None
+    state, new_revision = result
+    assert new_revision == revision + 1
+    assert state.last_price == Decimal("105")
+
+
+@pytest.mark.anyio
+async def test_wait_for_change_coalesces_rapid_mutations_to_the_latest() -> None:
+    """Several mutations land while nobody is actively waiting; the next
+    call must observe only the *latest* state/revision, never an
+    intermediate one — this is the whole backpressure story for the SSE
+    layer (task scope §11, §18, §21, §22): no per-consumer queue exists
+    to overflow in the first place."""
+    gateway = FakeQuoteGateway()
+    gateway.set_quote("AAPL", _quote("AAPL", "100", as_of=_T0))
+    manager = LiveMarketManager(None, gateway)
+    await manager.subscribe("AAPL")
+    _, revision = manager.get_state_with_revision("AAPL")  # type: ignore[misc]
+
+    for i in range(1, 6):
+        await manager._apply_rest_quote(
+            "AAPL", _quote("AAPL", f"{100 + i}", as_of=_T0 + timedelta(seconds=i))
+        )
+
+    result = await asyncio.wait_for(manager.wait_for_change("AAPL", since_revision=revision), timeout=2.0)
+    assert result is not None
+    state, new_revision = result
+    assert new_revision == revision + 5  # every mutation still bumped the counter...
+    assert state.last_price == Decimal("105")  # ...but only the latest value was ever observable
